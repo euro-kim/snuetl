@@ -1,0 +1,13 @@
+[Unit]
+Description=Synchronize SNU eTL every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+RandomizedDelaySec=60
+Persistent=true
+Unit=snuetl.service
+
+[Install]
+WantedBy=timers.target
+
