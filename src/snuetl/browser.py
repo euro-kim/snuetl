@@ -6,7 +6,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -412,8 +412,7 @@ def browser_looks_authenticated(context: Any, page: Any) -> bool:
     if login is not None:
         return False
     markers = page.locator(
-        "a[href*='/courses/'], a[href*='/dashboard'], "
-        "[aria-label*='Account'], [aria-label*='계정']"
+        "a[href*='/courses/'], a[href*='/dashboard'], [aria-label*='Account'], [aria-label*='계정']"
     )
     return _first_visible(markers) is not None
 
@@ -575,20 +574,24 @@ def profile_options(page: Any) -> list[tuple[str, Any]]:
     accessible account-menu contract as well as the older Korean markup.
     """
     triggers = (
-        page.locator("#global_nav_profile_link, #global_nav_account_link, [data-testid='account-nav']"),
+        page.locator(
+            "#global_nav_profile_link, #global_nav_account_link, [data-testid='account-nav']"
+        ),
         page.locator("[aria-label*='Account'], [aria-label*='계정'], [data-testid*='account']"),
         page.get_by_text(re.compile(r"프로필|profile|계정", re.IGNORECASE)),
     )
     trigger = None
-    for candidate in triggers:
-        trigger = _first_visible(candidate)
-        if trigger is not None:
-            break
+    deadline = time.monotonic() + 5
+    while trigger is None and time.monotonic() < deadline:
+        for candidate in triggers:
+            trigger = _first_visible(candidate)
+            if trigger is not None:
+                break
+        if trigger is None:
+            page.wait_for_timeout(200)
     if trigger is not None:
-        try:
+        with suppress(Exception):
             trigger.click()
-        except Exception:
-            pass
     options = page.locator(
         "[role='menuitem'], [role='option'], .profile-menu a, .account-menu a, "
         "#global_nav_profile a, #global_nav_profile button, #account-switcher a, "
@@ -612,43 +615,71 @@ def profile_options(page: Any) -> list[tuple[str, Any]]:
             return []
         return found
 
-    result = visible_options()
     account_switch = re.compile(r"계정\s*전환|switch\s+account|change\s+account", re.IGNORECASE)
-    switcher = next((item for label, item in result if account_switch.search(label)), None)
-    if switcher is None:
-        # Some eTL builds render the switch action as a plain text link without
-        # a role or stable class.
-        try:
-            candidate = page.get_by_text(account_switch).first
-            if candidate.is_visible():
-                switcher = candidate
-        except Exception:
-            switcher = None
+    result: list[tuple[str, Any]] = []
+    switcher = None
+    deadline = time.monotonic() + 5
+    while switcher is None and time.monotonic() < deadline:
+        result = visible_options()
+        switcher = next((item for label, item in result if account_switch.search(label)), None)
+        if switcher is None:
+            # Some eTL builds render the switch action as a plain text link without
+            # a role or stable class.
+            try:
+                candidate = page.get_by_text(account_switch).first
+                if candidate.is_visible():
+                    switcher = candidate
+            except Exception:
+                switcher = None
+        if switcher is None:
+            page.wait_for_timeout(200)
     if switcher is not None:
         # The top-level menu contains notifications/settings/account-switch;
         # only the second menu contains identities.
         try:
             switcher.click()
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(500)
         except Exception:
             return []
-        # The identity chooser is loaded as a same-origin LTI iframe.
-        for frame in page.frames:
-            if frame is page.main_frame or "sso-user-identity" not in frame.url:
-                continue
-            frame_options = frame.locator("a, button, [role='option'], [role='menuitem']")
-            try:
-                frame_result = []
-                for index in range(frame_options.count()):
-                    item = frame_options.nth(index)
-                    if item.is_visible():
+        # The current chooser is an LTI iframe and can arrive noticeably after
+        # its surrounding dialog. Wait for it rather than returning an empty
+        # profile list from the first frame snapshot.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            for frame in page.frames:
+                frame_url = str(frame.url or "").casefold()
+                if frame is page.main_frame or not any(
+                    marker in frame_url
+                    for marker in ("sso-user-identity", "user-identity", "account-switch")
+                ):
+                    continue
+                frame_options = frame.locator(
+                    "a, button, label[for], [role='option'], [role='menuitem'], "
+                    "input[type='radio'] + label"
+                )
+                try:
+                    frame_result = []
+                    seen_labels: set[str] = set()
+                    for index in range(frame_options.count()):
+                        item = frame_options.nth(index)
+                        if not item.is_visible():
+                            continue
                         label = " ".join((item.inner_text() or "").split())
-                        if label and label.casefold() not in {x.casefold() for x, _ in frame_result}:
-                            frame_result.append((label, item))
-                if frame_result:
-                    return frame_result
-            except Exception:
-                pass
+                        normalized = label.casefold()
+                        if (
+                            not label
+                            or len(label) > 160
+                            or normalized in seen_labels
+                            or normalized in {"취소", "닫기", "cancel", "close"}
+                        ):
+                            continue
+                        seen_labels.add(normalized)
+                        frame_result.append((label, item))
+                    if frame_result:
+                        return frame_result
+                except Exception:
+                    pass
+            page.wait_for_timeout(200)
         result = [
             (label, item)
             for label, item in visible_options()
@@ -657,35 +688,96 @@ def profile_options(page: Any) -> list[tuple[str, Any]]:
         ]
         if not result:
             # Account-switch dialogs in older deployments use plain buttons.
-            fallback = page.locator("[role='dialog'] a, [role='dialog'] button, #account-switcher a, #account-switcher button")
+            fallback = page.locator(
+                "[role='dialog'] a, [role='dialog'] button, #account-switcher a, #account-switcher button"
+            )
             try:
-                result = [(" ".join((item.inner_text() or "").split()), item)
-                          for index in range(fallback.count())
-                          for item in (fallback.nth(index),)
-                          if item.is_visible() and (item.inner_text() or "").strip()]
+                result = [
+                    (" ".join((item.inner_text() or "").split()), item)
+                    for index in range(fallback.count())
+                    for item in (fallback.nth(index),)
+                    if item.is_visible() and (item.inner_text() or "").strip()
+                ]
             except Exception:
                 result = []
     return result
 
 
-def switch_profile(config: Config, profile: str | None = None, *, headless: bool = False) -> list[str]:
+def _profile_is_current(item: Any) -> bool:
+    """The SNU chooser disables the button for the already active identity."""
+    try:
+        if item.is_disabled():
+            return True
+    except Exception:
+        pass
+    try:
+        disabled = item.get_attribute("disabled")
+        classes = set((item.get_attribute("class") or "").casefold().split())
+        aria_current = (item.get_attribute("aria-current") or "").casefold()
+        aria_selected = (item.get_attribute("aria-selected") or "").casefold()
+        return (
+            disabled is not None
+            or "disable" in classes
+            or aria_current in {"true", "page"}
+            or aria_selected == "true"
+        )
+    except Exception:
+        return False
+
+
+def select_profile(
+    config: Config,
+    chooser: Callable[[list[str]], str | None],
+    *,
+    headless: bool = False,
+) -> tuple[list[str], str | None]:
+    """Discover and select an identity without invalidating its browser menu."""
+    with (
+        profile_lock(config.lock_path),
+        open_authenticated_browser(config, headless=headless) as (context, page),
+    ):
+        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
+        ensure_authenticated_page(config, context, page)
+        options = profile_options(page)
+        labels = [label for label, _ in options]
+        selected = chooser(labels)
+        if selected is None:
+            return labels, None
+        wanted = selected.casefold()
+        match = next(
+            ((label, item) for label, item in options if label.casefold() == wanted),
+            None,
+        )
+        if match is None:
+            prefix_matches = [
+                (label, item) for label, item in options if label.casefold().startswith(wanted)
+            ]
+            partial_matches = [
+                (label, item) for label, item in options if wanted in label.casefold()
+            ]
+            candidates = prefix_matches or partial_matches
+            if len(candidates) == 1:
+                match = candidates[0]
+            elif len(candidates) > 1:
+                names = ", ".join(label for label, _ in candidates)
+                raise ValueError(f"profile name is ambiguous: {selected} ({names})")
+        if match is None:
+            raise ValueError(f"profile not found: {selected}")
+        selected_label, selected_item = match
+        if _profile_is_current(selected_item):
+            return labels, selected_label
+        selected_item.click()
+        page.wait_for_timeout(1000)
+        persist_auth_state(context, config, page.url)
+        return labels, selected_label
+
+
+def switch_profile(
+    config: Config, profile: str | None = None, *, headless: bool = False
+) -> list[str]:
     """Select an eTL identity from the account menu and return available labels."""
-    with profile_lock(config.lock_path):
-        with open_authenticated_browser(config, headless=headless) as (context, page):
-            page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-            ensure_authenticated_page(config, context, page)
-            options = profile_options(page)
-            labels = [label for label, _ in options]
-            if profile is None:
-                return labels
-            wanted = profile.casefold()
-            match = next((item for label, item in options if label.casefold() == wanted or wanted in label.casefold()), None)
-            if match is None:
-                raise ValueError(f"profile not found: {profile}")
-            match.click()
-            page.wait_for_timeout(1000)
-            persist_auth_state(context, config, page.url)
-            return labels
+    labels, _ = select_profile(config, lambda _: profile, headless=headless)
+    return labels
 
 
 def open_authenticated_browser(config: Config, *, headless: bool) -> Any:

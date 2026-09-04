@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import ipaddress
 import json
 import logging
@@ -8,10 +9,11 @@ import os
 import re
 import socket
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from .browser import (
     authenticated_entry_url,
@@ -31,6 +33,13 @@ from .syncer import _sync_file
 LOGGER = logging.getLogger(__name__)
 SYLLABUS_NAME = re.compile(r"syllabus|course[ _-]*outline|강의\s*계획(?:서)?", re.IGNORECASE)
 MEDIA_SUFFIXES = {".m3u8", ".mpd", ".mp4", ".webm", ".m4v"}
+MINIMUM_VIDEO_BYTES = 64 * 1024
+LEARNINGX_SESSION_COOKIES = {"xn_api_token", "laravel_session", "pni_token", "XSRF-TOKEN"}
+ATTENDANCE_ITEM = re.compile(r"lecture_attendance/items/view/(\d+)", re.IGNORECASE)
+CONTENT_ID = re.compile(
+    r"(?:var\s+content_id\s*=\s*['\"]|[?&]content_id=)([a-zA-Z0-9_-]+)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -47,7 +56,8 @@ class PullPlan:
         items = tuple(
             pair
             for pair in self.modules
-            if (pair[1].item_type.casefold() == "externaltool" or pair[1].external_url) and pair[1].published
+            if (pair[1].item_type.casefold() == "externaltool" or pair[1].external_url)
+            and pair[1].published
         )
         if self.selected_video_ids is None:
             return items
@@ -136,16 +146,22 @@ def discover_pull_plan(
 def plan_data(plan: PullPlan) -> dict[str, object]:
     known_video_bytes = sum(remote.size or 0 for _, remote in plan.uploaded_media)
     videos = [
-        {"video_id": item.remote_id, "course_id": course.remote_id,
-         "course_name": course.display_name, "title": item.title}
-        for course, item in plan.modules
-        if (item.item_type.casefold() == "externaltool" or item.external_url) and item.published
+        {
+            "video_id": item.remote_id,
+            "course_id": course.remote_id,
+            "course_name": course.display_name,
+            "title": item.title,
+        }
+        for course, item in plan.video_items
     ]
     videos.extend(
-        {"video_id": remote.remote_id, "course_id": course.remote_id,
-         "course_name": course.display_name, "title": remote.name}
-        for course, remote in plan.files
-        if (remote.content_type or "").casefold().startswith(("video/", "audio/"))
+        {
+            "video_id": remote.remote_id,
+            "course_id": course.remote_id,
+            "course_name": course.display_name,
+            "title": remote.name,
+        }
+        for course, remote in plan.uploaded_media
     )
     return {
         "kinds": list(plan.kinds),
@@ -156,7 +172,9 @@ def plan_data(plan: PullPlan) -> dict[str, object]:
         "video_items": len(plan.video_items) + len(plan.uploaded_media),
         "known_video_bytes": known_video_bytes,
         "video_size_complete": not plan.video_items,
-        "selected_video_ids": list(plan.selected_video_ids) if plan.selected_video_ids is not None else None,
+        "selected_video_ids": list(plan.selected_video_ids)
+        if plan.selected_video_ids is not None
+        else None,
         "videos": videos,
     }
 
@@ -205,7 +223,9 @@ def _managed_write(
         locally_edited = bool(existing["sha256"] and local_hash != existing["sha256"])
         if locally_edited and not force:
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            conflict = destination.with_name(f"{destination.stem}.remote-{stamp}{destination.suffix}")
+            conflict = destination.with_name(
+                f"{destination.stem}.remote-{stamp}{destination.suffix}"
+            )
             _atomic_write(conflict, body)
             summary.conflicts += 1
             summary.artifacts.append(str(conflict))
@@ -300,11 +320,16 @@ def _download_article_assets(context: object, html: str, base_url: str, asset_di
                 name = sanitize_component(Path(parts.path).name or f"asset-{len(body)}")
                 destination = asset_dir / name
                 if destination.exists() and _sha256_file(destination) != _sha256_bytes(body):
-                    destination = asset_dir / f"{destination.stem}--{_sha256_bytes(body)[:8]}{destination.suffix}"
+                    destination = (
+                        asset_dir
+                        / f"{destination.stem}--{_sha256_bytes(body)[:8]}{destination.suffix}"
+                    )
                 _atomic_write(destination, body)
                 node[attribute] = f"assets/{destination.name}"
             except Exception as exc:
-                LOGGER.warning("could not localize article asset host=%s error=%s", parts.hostname, exc)
+                LOGGER.warning(
+                    "could not localize article asset host=%s error=%s", parts.hostname, exc
+                )
     for node in soup(["script", "style"]):
         node.decompose()
     return str(soup)
@@ -478,7 +503,11 @@ def _pull_syllabi(
                             source_url = candidate
                     except Exception as exc:
                         summary.warnings.append(
-                            {"code": "SYLLABUS_SOURCE_FAILED", "message": str(exc), "course_id": course.remote_id}
+                            {
+                                "code": "SYLLABUS_SOURCE_FAILED",
+                                "message": str(exc),
+                                "course_id": course.remote_id,
+                            }
                         )
                 if source_html:
                     item = ContentItem(
@@ -522,11 +551,19 @@ def _pull_syllabi(
                             )
                     except Exception as exc:
                         summary.warnings.append(
-                            {"code": "SYLLABUS_PDF_FAILED", "message": str(exc), "course_id": course.remote_id}
+                            {
+                                "code": "SYLLABUS_PDF_FAILED",
+                                "message": str(exc),
+                                "course_id": course.remote_id,
+                            }
                         )
                 else:
                     summary.warnings.append(
-                        {"code": "SYLLABUS_MISSING", "message": "No official syllabus body was available.", "course_id": course.remote_id}
+                        {
+                            "code": "SYLLABUS_MISSING",
+                            "message": "No official syllabus body was available.",
+                            "course_id": course.remote_id,
+                        }
                     )
                 seen_hashes: dict[str, str] = {}
                 sources: list[dict[str, object]] = []
@@ -558,10 +595,22 @@ def _pull_syllabi(
                                     size_bytes=remote.size,
                                     status="deduplicated",
                                 )
-                            sources.append({"file_id": remote.remote_id, "path": canonical, "deduplicated": True})
+                            sources.append(
+                                {
+                                    "file_id": remote.remote_id,
+                                    "path": canonical,
+                                    "deduplicated": True,
+                                }
+                            )
                         else:
                             seen_hashes[digest] = str(pulled)
-                            sources.append({"file_id": remote.remote_id, "path": str(pulled), "deduplicated": False})
+                            sources.append(
+                                {
+                                    "file_id": remote.remote_id,
+                                    "path": str(pulled),
+                                    "deduplicated": False,
+                                }
+                            )
                     except Exception as exc:
                         summary.failed += 1
                         sources.append({"file_id": remote.remote_id, "error": str(exc)})
@@ -588,10 +637,15 @@ def _pull_syllabi(
 
 def _write_cookie_file(context: object, state_dir: Path) -> Path:
     state_dir.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", prefix="snuetl-cookies-", suffix=".txt", dir=state_dir, delete=False
-    )
-    with handle:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="snuetl-cookies-",
+        suffix=".txt",
+        dir=state_dir,
+        delete=False,
+    ) as handle:
+        path = Path(handle.name)
         handle.write("# Netscape HTTP Cookie File\n")
         for cookie in context.cookies():
             domain = str(cookie.get("domain") or "")
@@ -601,10 +655,196 @@ def _write_cookie_file(context: object, state_dir: Path) -> Path:
             name = str(cookie.get("name") or "").replace("\t", "")
             value = str(cookie.get("value") or "").replace("\t", "")
             handle.write(
-                "\t".join((domain, include_subdomains, str(cookie.get("path") or "/"), secure, str(max(expires, 0)), name, value)) + "\n"
+                "\t".join(
+                    (
+                        domain,
+                        include_subdomains,
+                        str(cookie.get("path") or "/"),
+                        secure,
+                        str(max(expires, 0)),
+                        name,
+                        value,
+                    )
+                )
+                + "\n"
             )
-    Path(handle.name).chmod(0o600)
-    return Path(handle.name)
+    path.chmod(0o600)
+    return path
+
+
+def _referer_for(url: str, fallback: str) -> str:
+    host = (urlsplit(url).hostname or "").casefold()
+    if host == "lcms.snu.ac.kr" or host.endswith(".naverncp.com"):
+        return "https://lcms.snu.ac.kr/"
+    return fallback
+
+
+def _append_media_candidate(candidates: list[tuple[str, str]], url: object, referer: str) -> None:
+    value = str(url or "").strip()
+    parts = urlsplit(value)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return
+    if (parts.hostname or "").casefold() == "lcms.snu.ac.kr" and parts.path.casefold().endswith(
+        "/viewer/uniplayer/preloader.mp4"
+    ):
+        return
+    candidate = (value, _referer_for(value, referer))
+    if candidate not in candidates:
+        candidates.append(candidate)
+
+
+def _is_lcms_lecture_url(url: object) -> bool:
+    host = (urlsplit(str(url or "")).hostname or "").casefold()
+    return host == "edge.naverncp.com" or host.endswith(".edge.naverncp.com")
+
+
+def _activate_lcms_player(page: object, *, timeout_ms: int = 15_000) -> bool:
+    """Start UniPlayer so it replaces its tiny preloader with the lecture URL."""
+    clicked = False
+    for frame in page.frames:
+        if (urlsplit(str(frame.url or "")).hostname or "").casefold() != "lcms.snu.ac.kr":
+            continue
+        try:
+            controls = frame.locator(".vc-front-screen-play-btn")
+            for index in range(controls.count()):
+                control = controls.nth(index)
+                if not control.is_visible():
+                    continue
+                control.click(force=True, timeout=5_000)
+                clicked = True
+                break
+        except Exception:
+            continue
+        if clicked:
+            break
+    if not clicked:
+        return False
+
+    elapsed = 0
+    while elapsed < timeout_ms:
+        for frame in page.frames:
+            try:
+                values = frame.locator("video.vc-vplay-video1").evaluate_all(
+                    "nodes => nodes.map(node => node.currentSrc || node.src || '')"
+                )
+                if any(_is_lcms_lecture_url(value) for value in values):
+                    return True
+            except Exception:
+                pass
+        page.wait_for_timeout(500)
+        elapsed += 500
+    return False
+
+
+def _dom_media_candidates(page: object) -> tuple[list[tuple[str, str]], list[str]]:
+    """Read progressive/HLS URLs and CMS IDs from every loaded LTI frame."""
+    candidates: list[tuple[str, str]] = []
+    content_ids: list[str] = []
+    for frame in page.frames:
+        frame_url = str(frame.url or "")
+        parts = urlsplit(frame_url)
+        referer = (
+            f"{parts.scheme}://{parts.netloc}/"
+            if parts.scheme in {"http", "https"} and parts.netloc
+            else "https://lcms.snu.ac.kr/"
+        )
+        try:
+            lcms_frame = (parts.hostname or "").casefold() == "lcms.snu.ac.kr"
+            selector = "video.vc-vplay-video1" if lcms_frame else "video, video source"
+            values = frame.locator(selector).evaluate_all(
+                """
+                nodes => nodes.flatMap(node => [
+                  node.currentSrc || '', node.src || '', node.getAttribute('src') || ''
+                ]).filter(Boolean)
+                """
+            )
+            for value in values:
+                if lcms_frame and not _is_lcms_lecture_url(value):
+                    continue
+                _append_media_candidate(candidates, value, referer)
+        except Exception:
+            pass
+        try:
+            source = frame.content()
+        except Exception:
+            source = ""
+        for match in CONTENT_ID.finditer(source):
+            if match.group(1) not in content_ids:
+                content_ids.append(match.group(1))
+    return candidates, content_ids
+
+
+def _learningx_content_id(context: object, course: Course, item: ModuleItem) -> str | None:
+    match = ATTENDANCE_ITEM.search(item.external_url or "")
+    if match is None:
+        return None
+    try:
+        token = next(
+            (
+                str(cookie.get("value") or "")
+                for cookie in context.cookies()
+                if cookie.get("name") == "xn_api_token" and cookie.get("value")
+            ),
+            None,
+        )
+        if not token:
+            return None
+        origin = f"{urlsplit(course.url).scheme}://{urlsplit(course.url).netloc}"
+        response = context.request.get(
+            f"{origin}/learningx/api/v1/courses/{quote(course.remote_id, safe='')}"
+            f"/attendance_items/{quote(match.group(1), safe='')}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20_000,
+        )
+        if response.status != 200:
+            return None
+        payload = response.json()
+        content_id = (payload.get("item_content_data") or {}).get("content_id")
+        return str(content_id) if content_id else None
+    except Exception:
+        return None
+
+
+def _cms_media_candidate(context: object, content_id: str) -> tuple[str, str] | None:
+    """Resolve the SNU LCMS player metadata to its progressive MP4 URL."""
+    try:
+        response = context.request.get(
+            "https://lcms.snu.ac.kr/viewer/ssplayer/uniplayer_support/content.php"
+            f"?content_id={quote(content_id, safe='')}",
+            headers={"Referer": "https://lcms.snu.ac.kr/"},
+            timeout=20_000,
+        )
+        if response.status != 200:
+            return None
+        body = html.unescape(response.text())
+        match = re.search(
+            r'method=["\']progressive["\'][^>]*>([^<]+)\[MEDIA_FILE\]',
+            body,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        return urljoin(str(response.url), match.group(1).strip() + "screen.mp4"), (
+            "https://lcms.snu.ac.kr/"
+        )
+    except Exception:
+        return None
+
+
+def _clear_stale_learningx_cookies(context: object) -> None:
+    """Force the next Canvas LTI launch to mint a current LearningX token."""
+    try:
+        present = {
+            str(cookie.get("name") or "")
+            for cookie in context.cookies()
+            if cookie.get("name") in LEARNINGX_SESSION_COOKIES
+        }
+        for name in present:
+            context.clear_cookies(name=name)
+    except Exception:
+        # Older Playwright releases may not support filtered clearing. Keeping
+        # the existing cookies is safer than clearing the authenticated session.
+        pass
 
 
 def _pull_videos(
@@ -617,6 +857,7 @@ def _pull_videos(
     max_height: int | None,
     captions: bool,
     jobs: int,
+    progress: Callable[[str], None] | None,
 ) -> None:
     if "videos" not in plan.kinds:
         return
@@ -630,6 +871,10 @@ def _pull_videos(
     except ImportError as exc:  # pragma: no cover - installation problem
         raise RuntimeError("yt-dlp is not installed; reinstall snuetl with dependencies") from exc
 
+    video_count = len(plan.video_items) + len(plan.uploaded_media)
+    if progress is not None:
+        progress(f"Preparing {video_count} selected video{'s' if video_count != 1 else ''}...")
+
     with (
         profile_lock(config.lock_path),
         open_authenticated_browser(config, headless=True) as (context, page),
@@ -637,7 +882,8 @@ def _pull_videos(
     ):
         page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
         ensure_authenticated_page(config, context, page)
-        cookie_file = _write_cookie_file(context, config.state_dir)
+        _clear_stale_learningx_cookies(context)
+        cookie_file: Path | None = None
         try:
             user_agent = page.evaluate("navigator.userAgent")
             with AuthenticatedDownloader(
@@ -655,6 +901,8 @@ def _pull_videos(
                         "videos",
                     )
                     try:
+                        if progress is not None:
+                            progress(f"Downloading {course.display_name}: {remote.name}")
                         with store.transaction():
                             _download_remote_artifact(
                                 downloader,
@@ -679,13 +927,23 @@ def _pull_videos(
                 if item.locked:
                     summary.skipped += 1
                     summary.warnings.append(
-                        {"code": "VIDEO_LOCKED", "message": item.title, "course_id": course.remote_id}
+                        {
+                            "code": "VIDEO_LOCKED",
+                            "message": item.title,
+                            "course_id": course.remote_id,
+                        }
                     )
                     continue
-                launch_url = item.external_url or item.html_url
+                launch_url = (
+                    item.external_url or item.html_url
+                    if item.item_type.casefold() == "externalurl"
+                    else item.html_url or item.external_url
+                )
                 if not launch_url:
                     summary.skipped += 1
                     continue
+                if progress is not None:
+                    progress(f"Resolving {course.display_name}: {item.title}")
                 base = course_content_dir(
                     root,
                     course.display_name,
@@ -697,22 +955,36 @@ def _pull_videos(
                 base.mkdir(parents=True, exist_ok=True)
                 revision = urlsplit(item.html_url or item.external_url or item.remote_id).path
                 existing = store.get_artifact("video", course.remote_id, item.remote_id)
+                invalid_existing = False
                 if (
                     existing is not None
                     and existing["source_revision"] == revision
                     and Path(str(existing["local_path"])).is_file()
                 ):
-                    summary.unchanged += 1
-                    summary.artifacts.append(str(existing["local_path"]))
-                    continue
-                captured: list[str] = []
+                    existing_path = Path(str(existing["local_path"]))
+                    if existing_path.stat().st_size >= MINIMUM_VIDEO_BYTES:
+                        summary.unchanged += 1
+                        summary.artifacts.append(str(existing_path))
+                        continue
+                    invalid_existing = True
+                    if progress is not None:
+                        progress(f"Replacing invalid placeholder: {item.title}")
+                captured: list[tuple[str, str]] = []
 
                 def observe(response: object) -> None:
                     try:
                         content_type = str(response.headers.get("content-type") or "").casefold()
                         suffix = Path(urlsplit(response.url).path).suffix.casefold()
-                        if suffix in MEDIA_SUFFIXES or "mpegurl" in content_type or "dash+xml" in content_type:
-                            captured.append(str(response.url))
+                        if (
+                            suffix in MEDIA_SUFFIXES
+                            or "mpegurl" in content_type
+                            or "dash+xml" in content_type
+                        ):
+                            headers = response.request.headers
+                            referer = str(
+                                headers.get("referer") or headers.get("referrer") or page.url
+                            )
+                            _append_media_candidate(captured, response.url, referer)
                     except Exception:
                         pass
 
@@ -721,10 +993,27 @@ def _pull_videos(
                     try:
                         page.goto(launch_url, wait_until="domcontentloaded")
                         page.wait_for_timeout(5_000)
-                        candidates = [page.url, *captured]
+                        _activate_lcms_player(page)
+                        dom_candidates, content_ids = _dom_media_candidates(page)
+                        candidates = [*dom_candidates]
+                        attendance_content_id = _learningx_content_id(context, course, item)
+                        if attendance_content_id and attendance_content_id not in content_ids:
+                            content_ids.append(attendance_content_id)
+                        for content_id in content_ids:
+                            cms_candidate = _cms_media_candidate(context, content_id)
+                            if cms_candidate is not None and cms_candidate not in candidates:
+                                candidates.append(cms_candidate)
+                        for candidate_url, candidate_referer in captured:
+                            _append_media_candidate(
+                                candidates,
+                                candidate_url,
+                                candidate_referer,
+                            )
+                        page_referer = page.url or launch_url
                         for frame in page.frames:
-                            if frame.url and frame.url not in candidates:
-                                candidates.append(frame.url)
+                            _append_media_candidate(candidates, frame.url, page_referer)
+                        _append_media_candidate(candidates, page.url, launch_url)
+                        _append_media_candidate(candidates, launch_url, launch_url)
                     except Exception as exc:
                         summary.failed += 1
                         summary.warnings.append(
@@ -741,13 +1030,16 @@ def _pull_videos(
                 format_selector = (
                     "bestvideo+bestaudio/best"
                     if max_height is None
-                    else f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]"
+                    else (
+                        f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best"
+                    )
                 )
                 options = {
                     "quiet": True,
                     "no_warnings": True,
+                    "noprogress": True,
                     "continuedl": True,
-                    "cookiefile": str(cookie_file),
+                    "overwrites": True,
                     "format": format_selector,
                     "merge_output_format": "mp4",
                     "outtmpl": str(base / f"{stem}.%(ext)s"),
@@ -757,28 +1049,94 @@ def _pull_videos(
                     "subtitlesformat": "vtt",
                     "concurrent_fragment_downloads": jobs,
                 }
+                last_percentage = -10
+
+                def report_download(status: dict[str, object]) -> None:
+                    nonlocal last_percentage
+                    if progress is None:
+                        return
+                    state = status.get("status")
+                    if state == "finished":
+                        progress(f"Finalizing {item.title}...")
+                        return
+                    if state != "downloading":
+                        return
+                    downloaded = status.get("downloaded_bytes")
+                    total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                    if not isinstance(downloaded, (int, float)) or not isinstance(
+                        total, (int, float)
+                    ):
+                        return
+                    percentage = min(100, int(downloaded * 100 / max(total, 1)))
+                    bucket = percentage // 10 * 10
+                    if bucket > last_percentage:
+                        last_percentage = bucket
+                        downloaded_mib = downloaded / (1024 * 1024)
+                        total_mib = total / (1024 * 1024)
+                        progress(
+                            f"Downloading {item.title}: {bucket}% "
+                            f"({downloaded_mib:.1f}/{total_mib:.1f} MiB)"
+                        )
+
+                options["progress_hooks"] = [report_download]
+                if cookie_file is not None:
+                    cookie_file.unlink(missing_ok=True)
+                cookie_file = _write_cookie_file(context, config.state_dir)
+                options["cookiefile"] = str(cookie_file)
                 error: Exception | None = None
                 before = set(base.glob(f"{stem}.*"))
-                for candidate in candidates:
+                media: Path | None = None
+                if progress is not None:
+                    progress(f"Starting download: {item.title}")
+                for candidate, referer in candidates:
                     try:
-                        with yt_dlp.YoutubeDL(options) as ydl:
+                        candidate_options = {
+                            **options,
+                            "http_headers": {
+                                "User-Agent": user_agent,
+                                "Referer": referer,
+                            },
+                        }
+                        with yt_dlp.YoutubeDL(candidate_options) as ydl:
                             ydl.download([candidate])
+                        produced = [path for path in set(base.glob(f"{stem}.*")) if path.is_file()]
+                        media = next(
+                            (
+                                path
+                                for path in produced
+                                if path.suffix.casefold() in {".mp4", ".mkv", ".webm", ".m4a"}
+                                and path.stat().st_size >= MINIMUM_VIDEO_BYTES
+                            ),
+                            None,
+                        )
+                        if media is None:
+                            raise RuntimeError(
+                                "downloaded media is too small and appears to be a player placeholder"
+                            )
                         error = None
                         break
                     except Exception as exc:
                         error = exc
-                if error is not None:
+                if error is not None or media is None:
+                    if error is None:
+                        error = RuntimeError("no downloadable media source was found")
                     message = str(redact(error))
-                    code = "VIDEO_DRM_OR_UNSUPPORTED" if re.search(r"DRM|encrypted", message, re.IGNORECASE) else "VIDEO_DOWNLOAD_FAILED"
+                    code = (
+                        "VIDEO_DRM_OR_UNSUPPORTED"
+                        if re.search(r"DRM|encrypted", message, re.IGNORECASE)
+                        else "VIDEO_DOWNLOAD_FAILED"
+                    )
                     summary.failed += 1
                     summary.warnings.append(
-                        {"code": code, "message": message, "course_id": course.remote_id, "video_id": item.remote_id}
+                        {
+                            "code": code,
+                            "message": message,
+                            "course_id": course.remote_id,
+                            "video_id": item.remote_id,
+                        }
                     )
-                    continue
-                produced = [path for path in set(base.glob(f"{stem}.*")) if path.is_file()]
-                media = next((path for path in produced if path.suffix.casefold() in {".mp4", ".mkv", ".webm", ".m4a"}), None)
-                if media is None:
-                    summary.failed += 1
+                    if progress is not None:
+                        progress(f"Download failed: {item.title}")
                     continue
                 with store.transaction():
                     store.record_artifact(
@@ -791,13 +1149,18 @@ def _pull_videos(
                         size_bytes=media.stat().st_size,
                         status="ok",
                     )
-                if media in before:
+                if invalid_existing:
+                    summary.updated += 1
+                elif media in before:
                     summary.unchanged += 1
                 else:
                     summary.created += 1
                 summary.artifacts.append(str(media))
+                if progress is not None:
+                    progress(f"Downloaded {item.title}")
         finally:
-            cookie_file.unlink(missing_ok=True)
+            if cookie_file is not None:
+                cookie_file.unlink(missing_ok=True)
 
 
 def execute_pull(
@@ -810,6 +1173,7 @@ def execute_pull(
     max_height: int | None = 1080,
     captions: bool = True,
     jobs: int = 1,
+    progress: Callable[[str], None] | None = None,
 ) -> PullSummary:
     destination = (root or config.download_dir).expanduser().resolve()
     summary = PullSummary(courses=len(plan.courses))
@@ -825,5 +1189,6 @@ def execute_pull(
         max_height=max_height,
         captions=captions,
         jobs=jobs,
+        progress=progress,
     )
     return summary

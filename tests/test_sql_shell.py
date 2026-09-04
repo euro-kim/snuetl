@@ -36,6 +36,16 @@ def test_ctrl_c_exits_interactive_sql_shell(tmp_path: Path, capsys) -> None:
     assert "Leaving snuetl SQL" in capsys.readouterr().out
 
 
+def test_ctrl_d_exits_interactive_sql_shell(tmp_path: Path, capsys) -> None:
+    database = tmp_path / "state.db"
+
+    def end_of_input(_prompt: str) -> str:
+        raise EOFError
+
+    assert run_sql_shell(database, input_fn=end_of_input) == 130
+    assert "Leaving snuetl SQL" in capsys.readouterr().out
+
+
 def test_interactive_sql_shell_refresh_callback(tmp_path: Path, capsys) -> None:
     database = tmp_path / "state.db"
     with StateStore(database):

@@ -10,12 +10,16 @@ codes are never stored.
 
 ## Install and first run
 
-Python 3.11 or newer is required. Install the command with its Python dependencies:
+Python 3.11 or newer is required. From a checkout, one script installs pipx when needed,
+installs the command with all dependencies, and starts setup:
 
 ```bash
-pipx install --include-deps .
-snuetl
+./setup.sh
 ```
+
+Agents and unattended installers can use `./setup.sh --install-only`, then call the stable
+`snuetl ... --json --no-input` interface. The traditional
+`pipx install --include-deps .` command remains supported.
 
 Running bare `snuetl` on a fresh machine opens a guided terminal setup. It:
 
@@ -27,9 +31,11 @@ Running bare `snuetl` on a fresh machine opens a guided terminal setup. It:
 - explicitly asks whether this device should be trusted (default: yes);
 - asks whether to send the 2FA code by email or phone;
 - prompts privately for the received code;
-- enables **이 브라우저에서 추가 인증 사용 안함**;
-- verifies the login by fetching the active course list; and
-- offers to enable synchronization every 15 minutes.
+- enables **이 브라우저에서 추가 인증 사용 안함**; and
+- verifies the login by fetching the active course list.
+
+Terminal choices use Up/Down to move, Space to check an option, and Enter to confirm.
+Setup does not prompt to create an automatic synchronization schedule.
 
 No configuration file needs to be created manually. Re-run the wizard later with
 `snuetl setup`, `snuetl onboard`, or `snuetl configure`. On a server without a
@@ -193,8 +199,8 @@ snuetl> .quit
 The shell supports tab completion where Python's `readline` module is available. Use
 `.help` for all commands, `.schema [TABLE]` for canonical fields, `.status` for cache
 freshness, and `.mode table|json|jsonl|csv` to change output without restarting.
-`SHOW TABLES;` is accepted as an SQL-style alias for `.tables`. Press Ctrl+C to leave
-query mode immediately.
+`SHOW TABLES;` is accepted as an SQL-style alias for `.tables`. Press Ctrl+C or Ctrl+D
+to leave query mode immediately.
 
 The canonical read-only tables are `semesters`, `courses`, `files`, `articles`,
 `announcements`, `pages`, `assignments`, `modules`, `module_items`, `videos`,
@@ -239,22 +245,23 @@ generated files are preserved; a changed remote copy is written beside them unle
 a rendered PDF when possible, matching uploaded PDFs, and a source manifest.
 
 Video pulling uses authenticated browser discovery and yt-dlp, defaults to 1080p and
-downloads available captions. It does not bypass DRM. `pull all` deliberately excludes
-videos. `pull videos` presents an arrow-key/spacebar checklist (including an All checkbox);
-non-interactive callers such as Hermes can pass one or more `--video-id` values, or `--yes`
-to select all. Use `--best` to remove the height cap, and inspect `--dry-run` first because
-provider-reported sizes are often unavailable.
-
-Interactive video pulls first open the eTL account/profile menu. Use the arrow keys to
-choose an identity (such as undergraduate or graduate school), or pass `--profile PROFILE`
-for a known label. The selected identity remains active in the trusted browser session.
+downloads available captions. For SNU LCMS lectures it reads the actual player media URL,
+rejects UniPlayer's short preloader clip, sends the LCMS referrer required by the CDN, and
+can resolve LearningX attendance items through their freshly minted LTI token. Interactive
+downloads report resolution status and byte/percentage progress. It does not bypass DRM.
+`pull all` deliberately excludes videos. `pull videos` presents an arrow-key/spacebar
+checklist (including an All checkbox); non-interactive callers such as Hermes can pass one
+or more `--video-id` values, or `--yes` to select all. Use `--best` to remove the height cap,
+and inspect `--dry-run` first because provider-reported sizes are often unavailable.
 
 `snuetl directory` prints the root. `snuetl directory PATH` changes it for future
 pulls without moving existing data. Add `--move --dry-run` to inspect a checksum-safe
 migration and then `--move --yes` to perform it.
 
-Use `snuetl profile` to list and interactively switch eTL identities, or
-`snuetl profile "Graduate"` to select one directly.
+Use `snuetl profile` to list and interactively switch eTL identities. Move with Up/Down,
+check one identity with Space, and press Enter to confirm. Use
+`snuetl profile "Graduate"` to select one directly; agents can list profiles with
+`snuetl profile --json --no-input`.
 
 ## Agent and script interface
 
@@ -271,7 +278,7 @@ snuetl pull articles --dry-run --json --no-input
 
 Exit codes are stable: 0 success, 1 command failure, 2 authentication required,
 3 invalid configuration/local state, 4 partial result, 5 required input, and 130
-Ctrl+C. Commands never prompt in `--no-input` mode.
+cancelled via Ctrl+C or Ctrl+D. Commands never prompt in `--no-input` mode.
 
 ## Synchronize files
 
@@ -300,9 +307,8 @@ never uses fixed screen coordinates.
 
 ## Automatic synchronization
 
-The setup wizard can create and enable a systemd user timer using the exact Python
-environment and configuration path used during onboarding. To install the static unit
-templates manually instead:
+Setup deliberately does not prompt to automate synchronization. To opt in, install the
+static systemd user-unit templates manually:
 
 ```bash
 mkdir -p ~/.config/systemd/user

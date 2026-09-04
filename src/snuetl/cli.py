@@ -5,8 +5,6 @@ import logging
 import platform
 import shutil
 import sys
-import termios
-import tty
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -15,7 +13,7 @@ from rich.table import Table
 
 from . import __version__
 from .agent import emit, emit_error, envelope
-from .browser import switch_profile
+from .browser import select_profile, switch_profile
 from .catalog import inspect_catalog, refresh_catalog
 from .config import Config, ConfigError, default_config_path, load_config, save_config
 from .credentials import load_credentials
@@ -36,21 +34,24 @@ from .onboarding import (
     run_setup,
 )
 from .profile import profile_lock
-from .puller import discover_pull_plan, execute_pull, plan_data
+from .puller import PullSummary, discover_pull_plan, execute_pull, plan_data
 from .query import execute_query
 from .scheduler import timer_is_enabled
 from .sql_shell import run_sql_shell
 from .state import StateStore
 from .syncer import synchronize
-from .uninstaller import build_inventory, execute_uninstall, inventory_data
 from .ui import (
+    choose_checkbox,
+    choose_checkboxes,
     console,
+    interactive_terminal,
     print_banner,
     print_catalog,
     print_commands,
     print_query_result,
     print_schema,
 )
+from .uninstaller import build_inventory, execute_uninstall, inventory_data
 from .versioning import get_version_info, update_self
 
 LOGGER = logging.getLogger(__name__)
@@ -166,15 +167,24 @@ def _parser() -> argparse.ArgumentParser:
     pull.add_argument("--course", action="append", default=[], help="course ID or unique title")
     pull.add_argument("--semester", action="append", default=[], help="canonical semester code")
     pull.add_argument("--directory", type=Path, help="override the managed root for this pull")
-    pull.add_argument("--dry-run", action="store_true", help="discover and estimate without writing")
+    pull.add_argument(
+        "--dry-run", action="store_true", help="discover and estimate without writing"
+    )
     pull.add_argument("--yes", action="store_true", help="accept bulk video download consent")
     pull.add_argument(
-        "--video-id", "--video", dest="video_ids", action="append", default=[],
+        "--video-id",
+        "--video",
+        dest="video_ids",
+        action="append",
+        default=[],
         help="select a video by ID (repeatable; for Hermes and unattended use)",
     )
-    pull.add_argument("--profile", help="eTL identity/profile label to use")
-    pull.add_argument("--force", action="store_true", help="overwrite locally edited generated content")
-    pull.add_argument("--best", action="store_true", help="download the best available video quality")
+    pull.add_argument(
+        "--force", action="store_true", help="overwrite locally edited generated content"
+    )
+    pull.add_argument(
+        "--best", action="store_true", help="download the best available video quality"
+    )
     pull.add_argument("--max-height", type=int, default=1080, help="maximum video height")
     pull.add_argument("--no-captions", action="store_true", help="do not download video captions")
     pull.add_argument("--jobs", type=int, default=1, help="video download concurrency (default: 1)")
@@ -187,8 +197,12 @@ def _parser() -> argparse.ArgumentParser:
 
     directory = subparsers.add_parser("directory", help="show or configure the managed pull root")
     directory.add_argument("path", nargs="?", type=Path)
-    directory.add_argument("--move", action="store_true", help="move tracked files to the new layout")
-    directory.add_argument("--dry-run", action="store_true", help="show the migration without changing it")
+    directory.add_argument(
+        "--move", action="store_true", help="move tracked files to the new layout"
+    )
+    directory.add_argument(
+        "--dry-run", action="store_true", help="show the migration without changing it"
+    )
     directory.add_argument("--yes", action="store_true", help="confirm the requested migration")
     add_agent_flags(directory)
 
@@ -215,12 +229,22 @@ def _parser() -> argparse.ArgumentParser:
     add_agent_flags(logout)
 
     uninstall = subparsers.add_parser("uninstall", help="remove snuetl and selected local data")
-    uninstall.add_argument("--dry-run", action="store_true", help="show everything that would be removed")
-    uninstall.add_argument("--yes", action="store_true", help="confirm using the selected safe defaults")
-    uninstall.add_argument("--delete-files", action="store_true", help="delete tracked pulled course content")
+    uninstall.add_argument(
+        "--dry-run", action="store_true", help="show everything that would be removed"
+    )
+    uninstall.add_argument(
+        "--yes", action="store_true", help="confirm using the selected safe defaults"
+    )
+    uninstall.add_argument(
+        "--delete-files", action="store_true", help="delete tracked pulled course content"
+    )
     uninstall.add_argument("--purge-config", action="store_true", help="remove configuration")
-    uninstall.add_argument("--purge-state", action="store_true", help="remove login, credentials, and history")
-    uninstall.add_argument("--purge", action="store_true", help="remove both configuration and state")
+    uninstall.add_argument(
+        "--purge-state", action="store_true", help="remove login, credentials, and history"
+    )
+    uninstall.add_argument(
+        "--purge", action="store_true", help="remove both configuration and state"
+    )
     uninstall.add_argument(
         "--remove-shared-deps",
         action="store_true",
@@ -428,12 +452,31 @@ def _capabilities() -> dict[str, object]:
         "schema_version": "1",
         "commands": {
             "inspect": ["courses", "files", "articles", "assignments"],
-            "sql": {"interactive": "snuetl sql", "noninteractive": ["--execute", "--file", "stdin"]},
+            "sql": {
+                "interactive": "snuetl sql",
+                "noninteractive": ["--execute", "--file", "stdin"],
+            },
             "pull": ["files", "articles", "syllabus", "videos", "all"],
-            "maintenance": ["refresh", "directory", "profile", "status", "doctor", "version", "update", "uninstall"],
+            "maintenance": [
+                "refresh",
+                "directory",
+                "profile",
+                "status",
+                "doctor",
+                "version",
+                "update",
+                "uninstall",
+            ],
         },
         "agent_flags": ["--json", "--no-input", "--yes", "--dry-run", "--video-id"],
-        "exit_codes": {"0": "success", "1": "command failure", "2": "authentication required", "3": "configuration or local-state error", "4": "partial result", "5": "input required"},
+        "exit_codes": {
+            "0": "success",
+            "1": "command failure",
+            "2": "authentication required",
+            "3": "configuration or local-state error",
+            "4": "partial result",
+            "5": "input required",
+        },
     }
 
 
@@ -450,17 +493,37 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
             "detail": f"{platform.system()} {machine}",
         },
         {"name": "chromium", "ok": browser_ok, "detail": browser_detail},
-        {"name": "ffmpeg", "ok": shutil.which("ffmpeg") is not None, "detail": shutil.which("ffmpeg") or "not installed"},
+        {
+            "name": "ffmpeg",
+            "ok": shutil.which("ffmpeg") is not None,
+            "detail": shutil.which("ffmpeg") or "not installed",
+        },
         {
             "name": "authentication_state",
             "ok": config.profile_dir.exists() and config.auth_state_path.exists(),
             "detail": str(config.state_dir),
         },
-        {"name": "download_directory", "ok": config.download_dir.exists(), "detail": str(config.download_dir)},
-        {"name": "automatic_relogin", "ok": saved is not None, "detail": saved.username if saved else "disabled", "optional": True},
+        {
+            "name": "download_directory",
+            "ok": config.download_dir.exists(),
+            "detail": str(config.download_dir),
+        },
+        {
+            "name": "automatic_relogin",
+            "ok": saved is not None,
+            "detail": saved.username if saved else "disabled",
+            "optional": True,
+        },
     ]
     if platform.system() == "Linux":
-        checks.append({"name": "systemd_timer", "ok": timer_is_enabled(), "detail": "15-minute timer", "optional": True})
+        checks.append(
+            {
+                "name": "systemd_timer",
+                "ok": timer_is_enabled(),
+                "detail": "15-minute timer",
+                "optional": True,
+            }
+        )
     required = [check for check in checks if not check.get("optional")]
     return {"ready": all(bool(check["ok"]) for check in required), "checks": checks}
 
@@ -477,63 +540,50 @@ def _read_sql(args: argparse.Namespace) -> str | None:
 
 
 def _video_choices(plan: object) -> list[tuple[str, str]]:
-    choices = [(item.remote_id, f"{course.display_name}: {item.title}") for course, item in plan.modules
-               if (item.item_type.casefold() == "externaltool" or item.external_url) and item.published]
-    choices.extend((remote.remote_id, f"{course.display_name}: {remote.name}") for course, remote in plan.files
-                   if (remote.content_type or "").casefold().startswith(("video/", "audio/")))
+    choices = [
+        (item.remote_id, f"{course.display_name}: {item.title}")
+        for course, item in plan.modules
+        if (item.item_type.casefold() == "externaltool" or item.external_url) and item.published
+    ]
+    choices.extend(
+        (remote.remote_id, f"{course.display_name}: {remote.name}")
+        for course, remote in plan.files
+        if (remote.content_type or "").casefold().startswith(("video/", "audio/"))
+    )
     return choices
 
 
-def _choose_profile(config: Config, args: argparse.Namespace) -> bool:
-    """Offer the same identity switch exposed by the eTL account menu."""
-    if args.profile:
-        switch_profile(config, args.profile, headless=False)
-        return True
-    if args.no_input or args.json:
-        return True
-    labels = switch_profile(config, None, headless=False)
-    if len(labels) <= 1:
-        return True
-    selected = 0
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(fd)
-        while True:
-            console.clear()
-            console.print("Choose eTL profile (↑/↓, Enter select, q cancel)")
-            for index, label in enumerate(labels):
-                console.print(f"{'>' if index == selected else ' '} {label}")
-            key = sys.stdin.read(1)
-            if key == "\x1b":
-                sequence = sys.stdin.read(2)
-                if sequence == "[A": selected = max(0, selected - 1)
-                elif sequence == "[B": selected = min(len(labels) - 1, selected + 1)
-            elif key in {"\r", "\n"}:
-                switch_profile(config, labels[selected], headless=False)
-                return True
-            elif key.casefold() == "q":
-                return False
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
 def _run_profile(config: Config, args: argparse.Namespace) -> int:
-    labels = switch_profile(config, None, headless=_headless_choice(args))
+    headless = _headless_choice(args)
+    labels: list[str]
+    selected: str | None = None
     if args.name:
-        switch_profile(config, args.name, headless=_headless_choice(args))
-        labels = [args.name]
-    elif len(labels) > 1:
-        # Reuse the terminal selector used by video pulls.
-        args.profile = None
-        if not _choose_profile(config, args):
-            return 0
+        labels, selected = select_profile(
+            config,
+            lambda _: args.name,
+            headless=headless,
+        )
+    elif not (args.no_input or args.json) and interactive_terminal():
+        labels, selected = select_profile(
+            config,
+            lambda available: choose_checkbox(
+                "Choose eTL profile",
+                tuple((label, label) for label in available),
+                require_space=True,
+            ),
+            headless=headless,
+        )
+    else:
+        labels = switch_profile(config, None, headless=headless)
     if args.json:
-        emit(envelope("profile", data={"profiles": labels, "selected": args.name}))
+        emit(envelope("profile", data={"profiles": labels, "selected": selected}))
     else:
         console.print("Available eTL profiles:")
         for label in labels:
-            console.print(f"  {label}")
+            marker = "[green]✓[/green]" if label == selected else " "
+            console.print(f" {marker} {label}")
+        if not labels:
+            console.print("  [yellow]No switchable profiles were found.[/yellow]")
     return 0
 
 
@@ -551,39 +601,35 @@ def _select_videos(plan: object, args: argparse.Namespace) -> tuple[bool, tuple[
         return True, tuple(video_id for video_id, _ in choices)
     if args.dry_run:
         return True, None
-    if args.no_input or args.json:
+    if args.no_input or args.json or not interactive_terminal():
         return False, None
-    # Simple terminal selector: arrows move, space toggles, Enter accepts.
-    selected = [False] * len(choices)
-    cursor = 0  # 0 is the All row; video rows are 1..N
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(fd)
-        while True:
-            console.clear()
-            console.print("Select videos (↑/↓ move, Space toggle, Enter download, q cancel)")
-            all_selected = all(selected)
-            console.print(f"{'>' if cursor == 0 else ' '} {'[x]' if all_selected else '[ ]'} All")
-            for index, (_, label) in enumerate(choices):
-                marker = ">" if index + 1 == cursor else " "
-                console.print(f"{marker} {'[x]' if selected[index] else '[ ]'} {label}")
-            key = sys.stdin.read(1)
-            if key == "\x1b":
-                sequence = sys.stdin.read(2)
-                if sequence == "[A": cursor = max(0, cursor - 1)
-                elif sequence == "[B": cursor = min(len(choices), cursor + 1)
-            elif key == " ":
-                if cursor == 0:
-                    selected = [not all_selected] * len(choices)
-                else:
-                    selected[cursor - 1] = not selected[cursor - 1]
-            elif key in {"\r", "\n"}:
-                return True, tuple(video_id for (video_id, _), yes in zip(choices, selected) if yes)
-            elif key.casefold() == "q":
-                return False, None
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    selected = choose_checkboxes(
+        "Select videos",
+        tuple((label, video_id) for video_id, label in choices),
+        include_all=True,
+    )
+    return True, selected
+
+
+def _print_pull_summary(summary: PullSummary, root: Path) -> None:
+    console.print(
+        "Pull complete: "
+        f"{summary.created} created, {summary.updated} updated, "
+        f"{summary.unchanged} unchanged, {summary.skipped} skipped, "
+        f"{summary.failed} failed."
+    )
+    if summary.artifacts:
+        console.print("Saved artifacts:")
+        for artifact in summary.artifacts:
+            console.print(f"  {artifact}", markup=False, highlight=False)
+    else:
+        console.print(f"No artifacts written under {root}", markup=False, highlight=False)
+    if summary.warnings:
+        console.print("Warnings:")
+        for warning in summary.warnings:
+            code = str(warning.get("code") or "PULL_WARNING")
+            message = str(warning.get("message") or "Unknown warning")
+            console.print(f"  {code}: {message}", markup=False, highlight=False)
 
 
 def _run_uninstall(config: Config, args: argparse.Namespace) -> int:
@@ -609,7 +655,12 @@ def _run_uninstall(config: Config, args: argparse.Namespace) -> int:
     remove_shared = args.remove_shared_deps
     if not args.yes:
         if args.no_input or args.json:
-            emit_error("uninstall", "INPUT_REQUIRED", "Uninstall requires confirmation.", "Pass --yes after reviewing --dry-run.") if args.json else LOGGER.error("uninstall requires --yes in --no-input mode")
+            emit_error(
+                "uninstall",
+                "INPUT_REQUIRED",
+                "Uninstall requires confirmation.",
+                "Pass --yes after reviewing --dry-run.",
+            ) if args.json else LOGGER.error("uninstall requires --yes in --no-input mode")
             return 5
         console.print_json(data=data)
         delete_files = not Confirm.ask("Keep downloaded course files?", default=True)
@@ -668,7 +719,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 from .query import SCHEMA
 
-                selected = [asdict(item) for item in SCHEMA if args.table is None or item.name == args.table]
+                selected = [
+                    asdict(item) for item in SCHEMA if args.table is None or item.name == args.table
+                ]
                 if not selected:
                     raise ValueError(f"unknown canonical table: {args.table}")
                 emit(envelope("schema", data=selected))
@@ -689,7 +742,12 @@ def main(argv: list[str] | None = None) -> int:
             if not config.setup_complete or not auth_ready:
                 if args.no_input or args.json:
                     if args.json:
-                        emit_error("snuetl", "INPUT_REQUIRED", "Guided setup requires terminal input.", "Run snuetl setup interactively.")
+                        emit_error(
+                            "snuetl",
+                            "INPUT_REQUIRED",
+                            "Guided setup requires terminal input.",
+                            "Run snuetl setup interactively.",
+                        )
                     else:
                         LOGGER.error("guided setup requires terminal input")
                     return 5
@@ -709,7 +767,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {"setup", "onboard", "configure"}:
             if args.no_input or args.json:
                 if args.json:
-                    emit_error(args.command, "INPUT_REQUIRED", "Guided setup requires terminal input.", "Run snuetl setup without --json or --no-input.")
+                    emit_error(
+                        args.command,
+                        "INPUT_REQUIRED",
+                        "Guided setup requires terminal input.",
+                        "Run snuetl setup without --json or --no-input.",
+                    )
                 else:
                     LOGGER.error("guided setup requires terminal input")
                 return 5
@@ -722,7 +785,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "login":
             if args.no_input or args.json:
                 if args.json:
-                    emit_error("login", "INPUT_REQUIRED", "Login may require credentials and 2FA.", "Run snuetl login interactively.")
+                    emit_error(
+                        "login",
+                        "INPUT_REQUIRED",
+                        "Login may require credentials and 2FA.",
+                        "Run snuetl login interactively.",
+                    )
                 else:
                     LOGGER.error("login requires terminal input")
                 return 5
@@ -787,14 +855,17 @@ def main(argv: list[str] | None = None) -> int:
                 if sys.stdin.isatty() and not args.json:
                     return run_sql_shell(
                         config.database_path,
-                        refresh=lambda: refresh_catalog(
-                            config, headless=_headless_choice(args)
-                        ),
+                        refresh=lambda: refresh_catalog(config, headless=_headless_choice(args)),
                         output_format=args.format,
                         limit=args.limit,
                     )
                 if args.json:
-                    emit_error(args.command, "INPUT_REQUIRED", "No SQL statement was supplied.", "Use --execute, --file, or pipe SQL on stdin.")
+                    emit_error(
+                        args.command,
+                        "INPUT_REQUIRED",
+                        "No SQL statement was supplied.",
+                        "Use --execute, --file, or pipe SQL on stdin.",
+                    )
                     return 5
                 print_schema()
                 return 0
@@ -813,8 +884,6 @@ def main(argv: list[str] | None = None) -> int:
             # Normalize folders produced by older releases before this pull so
             # files, articles, syllabi, and videos share one course directory.
             repair_legacy_layout(validate_managed_root(args.directory or config.download_dir))
-            if args.kind == "videos" and not _choose_profile(config, args):
-                return 0
             plan = discover_pull_plan(
                 config,
                 kinds,
@@ -825,9 +894,17 @@ def main(argv: list[str] | None = None) -> int:
             if not selected_ok:
                 if args.json:
                     choices = _video_choices(plan)
-                    emit_error("pull", "INPUT_REQUIRED", "Video selection is required.", "Pass --video-id for each selected video or --yes for all; available IDs: " + ", ".join(video_id for video_id, _ in choices))
+                    emit_error(
+                        "pull",
+                        "INPUT_REQUIRED",
+                        "Video selection is required.",
+                        "Pass --video-id for each selected video or --yes for all; available IDs: "
+                        + ", ".join(video_id for video_id, _ in choices),
+                    )
                 else:
-                    LOGGER.error("video selection required; use the interactive selector or pass --video-id/--yes")
+                    LOGGER.error(
+                        "video selection required; use the interactive selector or pass --video-id/--yes"
+                    )
                 return 5
             if selected_ids is not None:
                 plan = replace(plan, selected_video_ids=selected_ids)
@@ -841,26 +918,42 @@ def main(argv: list[str] | None = None) -> int:
                 max_height=None if args.best else args.max_height,
                 captions=not args.no_captions,
                 jobs=args.jobs,
+                progress=(
+                    None
+                    if args.json
+                    else lambda message: console.print(message, markup=False, highlight=False)
+                ),
             )
             data = {"plan": plan_data(plan), "result": asdict(summary), "managed_root": str(root)}
             if args.json:
                 emit(envelope("pull", data=data, warnings=summary.warnings))
-            else:
+            elif args.dry_run:
                 console.print_json(data=data)
+            else:
+                _print_pull_summary(summary, root)
             return 4 if summary.partial else 0
         if args.command == "directory":
             if args.path is None:
                 data = {"managed_root": str(config.download_dir)}
-                emit(envelope("directory", data=data)) if args.json else console.print(str(config.download_dir))
+                emit(envelope("directory", data=data)) if args.json else console.print(
+                    str(config.download_dir)
+                )
                 return 0
             root = validate_managed_root(args.path)
             entries = plan_directory_migration(config, root) if args.move else []
             if args.move and entries and not args.dry_run and not args.yes:
                 if args.no_input or args.json:
                     if args.json:
-                        emit_error("directory", "INPUT_REQUIRED", "Moving tracked files requires confirmation.", "Review with --dry-run, then pass --yes.")
+                        emit_error(
+                            "directory",
+                            "INPUT_REQUIRED",
+                            "Moving tracked files requires confirmation.",
+                            "Review with --dry-run, then pass --yes.",
+                        )
                     return 5
-                if not Confirm.ask(f"Move {len(entries)} tracked artifact(s) to {root}?", default=False):
+                if not Confirm.ask(
+                    f"Move {len(entries)} tracked artifact(s) to {root}?", default=False
+                ):
                     return 0
             summary = execute_directory_migration(config, entries, dry_run=args.dry_run)
             legacy = repair_legacy_layout(root, dry_run=args.dry_run) if args.move else None
@@ -902,7 +995,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "logout":
             if (args.no_input or args.json) and not args.yes:
                 if args.json:
-                    emit_error("logout", "INPUT_REQUIRED", "Logout requires confirmation.", "Pass --yes to remove authentication.")
+                    emit_error(
+                        "logout",
+                        "INPUT_REQUIRED",
+                        "Logout requires confirmation.",
+                        "Pass --yes to remove authentication.",
+                    )
                 return 5
             result = _logout(config, args.yes)
             if args.json:
@@ -913,37 +1011,62 @@ def main(argv: list[str] | None = None) -> int:
         raise AssertionError(f"unexpected command {args.command}")
     except AuthenticationRequired as exc:
         if getattr(args, "json", False):
-            emit_error(args.command or "snuetl", "AUTHENTICATION_REQUIRED", str(redact(exc)), "Run snuetl login interactively.")
+            emit_error(
+                args.command or "snuetl",
+                "AUTHENTICATION_REQUIRED",
+                str(redact(exc)),
+                "Run snuetl login interactively.",
+            )
         else:
             LOGGER.error("authentication required: %s", exc)
         return 2
     except (ConfigError, OSError, ValueError) as exc:
         if getattr(args, "json", False):
-            emit_error(args.command or "snuetl", "LOCAL_STATE_ERROR", str(redact(exc)), "Check the command arguments and run snuetl doctor.")
+            emit_error(
+                args.command or "snuetl",
+                "LOCAL_STATE_ERROR",
+                str(redact(exc)),
+                "Check the command arguments and run snuetl doctor.",
+            )
         else:
             LOGGER.error("configuration or local-state error: %s", exc)
         return 3
     except SnuetlError as exc:
         if getattr(args, "json", False):
-            emit_error(args.command or "snuetl", "COMMAND_FAILED", str(redact(exc)), "Retry with --verbose or run snuetl doctor.")
+            emit_error(
+                args.command or "snuetl",
+                "COMMAND_FAILED",
+                str(redact(exc)),
+                "Retry with --verbose or run snuetl doctor.",
+            )
         else:
             LOGGER.error("command failed: %s", exc)
         return 1
+    except (KeyboardInterrupt, EOFError):
+        if getattr(args, "json", False):
+            emit_error(
+                args.command or "snuetl",
+                "CANCELLED",
+                "Cancelled by user.",
+                "Run the command again when ready.",
+            )
+        else:
+            LOGGER.error("cancelled")
+        return 130
     except Exception as exc:
         # Browser installation/launch errors and unexpected LMS changes should
         # be concise in scheduled logs. --verbose enables the underlying
         # libraries' diagnostic output without exposing terminal credentials.
         if getattr(args, "json", False):
-            emit_error(args.command or "snuetl", "UNEXPECTED_FAILURE", str(redact(exc)), "Retry with --verbose and report the failure if it persists.")
+            emit_error(
+                args.command or "snuetl",
+                "UNEXPECTED_FAILURE",
+                str(redact(exc)),
+                "Retry with --verbose and report the failure if it persists.",
+            )
         else:
             LOGGER.error("unexpected failure: %s", exc)
         return 1
-    except KeyboardInterrupt:
-        if getattr(args, "json", False):
-            emit_error(args.command or "snuetl", "CANCELLED", "Cancelled by user.", "Run the command again when ready.")
-        else:
-            LOGGER.error("cancelled")
-        return 130
 
 
 if __name__ == "__main__":  # pragma: no cover

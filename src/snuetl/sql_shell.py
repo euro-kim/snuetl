@@ -73,7 +73,7 @@ def _help() -> None:
 
 Use [cyan]SHOW TABLES;[/cyan] as a SQL alternative to [cyan].tables[/cyan]. Terminate SQL with a semicolon.
 Press Enter on an empty continuation line to run the buffered statement without a
-semicolon. Only read-only SQL is accepted. Ctrl+C exits the shell."""
+semicolon. Only read-only SQL is accepted. Ctrl+C or Ctrl+D exits the shell."""
     )
 
 
@@ -102,10 +102,7 @@ def run_sql_shell(
     while True:
         try:
             line = input_fn("   ...> " if buffer else "snuetl> ")
-        except EOFError:
-            console.print()
-            return 0
-        except KeyboardInterrupt:
+        except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Leaving snuetl SQL.[/dim]")
             return 130
 

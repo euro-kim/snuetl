@@ -18,8 +18,40 @@ from .credentials import SavedCredentials, load_credentials, save_credentials
 from .errors import AuthenticationRequired
 from .profile import profile_lock
 from .provenance import record_apt_package, record_playwright_browser
-from .scheduler import install_user_timer, timer_is_enabled
-from .ui import console, print_banner, print_catalog, print_commands
+from .scheduler import timer_is_enabled
+from .ui import (
+    choose_checkbox,
+    console,
+    interactive_terminal,
+    print_banner,
+    print_catalog,
+    print_commands,
+)
+
+
+def _confirm(prompt: str, *, default: bool) -> bool:
+    """Use navigable checkboxes on a TTY and retain a stream-safe fallback."""
+    if not interactive_terminal():
+        return Confirm.ask(prompt, default=default)
+    selected = choose_checkbox(
+        prompt,
+        (("Yes", True), ("No", False)),
+        default=0 if default else 1,
+        require_space=True,
+    )
+    return bool(selected)
+
+
+def _choose(prompt: str, choices: tuple[str, ...], *, default: str) -> str:
+    if not interactive_terminal():
+        return Prompt.ask(prompt, choices=list(choices), default=default)
+    selected = choose_checkbox(
+        prompt,
+        tuple((choice, choice) for choice in choices),
+        default=choices.index(default),
+        require_space=True,
+    )
+    return selected or default
 
 
 def display_available() -> bool:
@@ -91,7 +123,7 @@ def ensure_ffmpeg(config: Config) -> bool:
             "[yellow]![/yellow] FFmpeg is unavailable; video pulls that need merging will fail"
         )
         return False
-    if not Confirm.ask("Install FFmpeg for lecture-video downloads (sudo may prompt)?", default=True):
+    if not _confirm("Install FFmpeg for lecture-video downloads (sudo may prompt)?", default=True):
         return False
     apt_get = shutil.which("apt-get")
     prefix: list[str] = []
@@ -158,7 +190,7 @@ def ensure_browser(config: Config) -> Config:
             )
             return system_config
 
-    if is_raspberry_pi() and Confirm.ask(
+    if is_raspberry_pi() and _confirm(
         "Install the Raspberry Pi OS Chromium package now (sudo may prompt)?",
         default=True,
     ):
@@ -189,7 +221,7 @@ def ensure_browser(config: Config) -> Config:
         console.print("[green]✓[/green] Chromium installed")
         return config
 
-    if platform.system() == "Linux" and Confirm.ask(
+    if platform.system() == "Linux" and _confirm(
         "Chromium needs Linux system libraries. Install them now (sudo may prompt)?",
         default=True,
     ):
@@ -206,11 +238,8 @@ def ensure_browser(config: Config) -> Config:
 
 def prompt_login(config: Config, *, headless: bool) -> None:
     console.rule("[bold]SNU authentication")
-    console.print(
-        "Verification codes are used only for this login and are never saved."
-    )
     saved = load_credentials(config)
-    use_saved = saved is not None and Confirm.ask(
+    use_saved = saved is not None and _confirm(
         f"Use the saved SNU credentials for {saved.username}?",
         default=True,
     )
@@ -225,20 +254,20 @@ def prompt_login(config: Config, *, headless: bool) -> None:
         while not password:
             password = Prompt.ask("SNU password", password=True)
 
-    save_login = Confirm.ask(
+    save_login = _confirm(
         "Save the SNU ID and password in a plaintext owner-only file for automatic re-login? "
         f"(owner-only file: {config.credentials_path})",
         default=True,
     )
-    trust_browser = Confirm.ask(
+    trust_browser = _confirm(
         "Trust this device so SNU does not request 2FA on routine re-logins?",
         default=saved.trust_browser if use_saved and saved is not None else True,
     )
 
     def method_provider() -> str:
-        return Prompt.ask(
+        return _choose(
             "Send the additional-verification code by",
-            choices=["email", "phone"],
+            ("email", "phone"),
             default="email",
         )
 
@@ -290,7 +319,7 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
     if force_headless is None:
         login_headless = not display_available()
         if not login_headless:
-            show = Confirm.ask("Show the browser during SNU login?", default=True)
+            show = _confirm("Show the browser during SNU login?", default=True)
             login_headless = not show
     else:
         login_headless = force_headless
@@ -301,7 +330,7 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
         or load_credentials(config) is None
     )
     if not needs_login:
-        needs_login = Confirm.ask("Refresh SNU authentication now?", default=False)
+        needs_login = _confirm("Refresh SNU authentication now?", default=False)
     if needs_login:
         with profile_lock(config.lock_path):
             prompt_login(config, headless=login_headless)
@@ -318,17 +347,6 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
 
     config = replace(config, setup_complete=True)
     save_config(config, path)
-
-    console.rule("[bold]4. Automation")
-    if platform.system() == "Linux" and Confirm.ask(
-        "Enable automatic synchronization every 15 minutes?", default=True
-    ):
-        try:
-            timer_path = install_user_timer(path, interval_minutes=15)
-            console.print(f"[green]✓[/green] Enabled systemd timer at [dim]{timer_path}[/dim]")
-        except Exception as exc:
-            console.print(f"[yellow]![/yellow] Could not enable the timer: {exc}")
-            console.print("You can retry later with [cyan]snuetl setup[/cyan].")
 
     console.rule("[bold green]Setup complete")
     print_commands()

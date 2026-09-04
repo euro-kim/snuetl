@@ -1,7 +1,14 @@
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 
-from snuetl.browser import _restore_auth_state, authenticated_entry_url, persist_auth_state
+from snuetl import browser
+from snuetl.browser import (
+    _restore_auth_state,
+    authenticated_entry_url,
+    persist_auth_state,
+    select_profile,
+)
 from snuetl.config import load_config
 
 
@@ -60,3 +67,88 @@ def test_normalizes_myetl_external_tool_landing_to_dashboard(tmp_path: Path) -> 
         "https://myetl.snu.ac.kr/accounts/1/external_tools/102?launch_type=global_navigation",
     )
     assert authenticated_entry_url(config) == "https://myetl.snu.ac.kr/"
+
+
+def test_profile_is_discovered_and_selected_in_one_browser_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = replace(load_config(tmp_path / "missing.toml"), state_dir=tmp_path / "state")
+
+    class Item:
+        clicked = False
+
+        def click(self) -> None:
+            self.clicked = True
+
+    class Page:
+        url = "https://myetl.snu.ac.kr/"
+
+        @staticmethod
+        def goto(*args, **kwargs) -> None:
+            pass
+
+        @staticmethod
+        def wait_for_timeout(*args, **kwargs) -> None:
+            pass
+
+    context = _Context()
+    page = Page()
+    graduate = Item()
+    monkeypatch.setattr(browser, "profile_lock", lambda _: nullcontext())
+    monkeypatch.setattr(
+        browser,
+        "open_authenticated_browser",
+        lambda *args, **kwargs: nullcontext((context, page)),
+    )
+    monkeypatch.setattr(browser, "ensure_authenticated_page", lambda *args: None)
+    monkeypatch.setattr(
+        browser,
+        "profile_options",
+        lambda _: [("Undergraduate", Item()), ("Graduate School", graduate)],
+    )
+    monkeypatch.setattr(browser, "persist_auth_state", lambda *args: None)
+
+    labels, selected = select_profile(config, lambda _: "Graduate", headless=True)
+
+    assert labels == ["Undergraduate", "Graduate School"]
+    assert selected == "Graduate School"
+    assert graduate.clicked is True
+
+
+def test_confirming_current_disabled_profile_succeeds_without_clicking(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = replace(load_config(tmp_path / "missing.toml"), state_dir=tmp_path / "state")
+
+    class CurrentItem:
+        clicked = False
+
+        @staticmethod
+        def is_disabled() -> bool:
+            return True
+
+        def click(self) -> None:
+            self.clicked = True
+
+    class Page:
+        url = "https://myetl.snu.ac.kr/"
+
+        @staticmethod
+        def goto(*args, **kwargs) -> None:
+            pass
+
+    current = CurrentItem()
+    monkeypatch.setattr(browser, "profile_lock", lambda _: nullcontext())
+    monkeypatch.setattr(
+        browser,
+        "open_authenticated_browser",
+        lambda *args, **kwargs: nullcontext((_Context(), Page())),
+    )
+    monkeypatch.setattr(browser, "ensure_authenticated_page", lambda *args: None)
+    monkeypatch.setattr(browser, "profile_options", lambda _: [("Current profile", current)])
+
+    labels, selected = select_profile(config, lambda _: "Current profile", headless=True)
+
+    assert labels == ["Current profile"]
+    assert selected == "Current profile"
+    assert current.clicked is False
