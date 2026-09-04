@@ -9,6 +9,8 @@ setup_complete = false
 # "bundled" uses the Chromium installed by `playwright install chromium`.
 # Set this to "chrome" to use Google Chrome instead.
 channel = "bundled"
+# On Raspberry Pi OS, setup detects /usr/bin/chromium automatically.
+# executable_path = "/usr/bin/chromium"
 headless = true
 login_timeout_seconds = 600
 

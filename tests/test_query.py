@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from snuetl.models import ContentItem, Course, RemoteFile, Semester
+from snuetl.models import ContentItem, Course, ModuleItem, RemoteFile, Semester
 from snuetl.query import QueryError, execute_query
 from snuetl.state import StateStore
 from snuetl.ui import print_query_result
@@ -43,6 +43,21 @@ def _seed_catalog(path: Path) -> None:
             [announcement],
             scope="articles",
         )
+        store.replace_catalog_modules(
+            course,
+            [
+                ModuleItem(
+                    "m1",
+                    "Week 1",
+                    "v1",
+                    "101",
+                    "ExternalTool",
+                    "Lecture 1",
+                    position=1,
+                    html_url="https://lms.test/launch/v1",
+                )
+            ],
+        )
 
 
 def test_queries_canonical_views(tmp_path: Path) -> None:
@@ -69,6 +84,19 @@ def test_queries_canonical_views(tmp_path: Path) -> None:
     )
     announcements = execute_query(path, "SELECT announcement_id, title FROM announcements")
     assert announcements.rows == (("701", "Welcome"),)
+    videos = execute_query(path, "SELECT video_id, module_name, title FROM videos")
+    assert videos.rows == (("v1", "Week 1", "Lecture 1"),)
+
+
+def test_show_tables_lists_canonical_views(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    result = execute_query(path, "SHOW TABLES;")
+    assert result.columns == ("table_name",)
+    assert result.rows[0] == ("semesters",)
+    assert ("files",) in result.rows
+    assert ("assignments",) in result.rows
+    assert ("videos",) in result.rows
+    assert ("artifacts",) in result.rows
 
 
 def test_query_is_read_only_and_honors_output_limit(tmp_path: Path) -> None:

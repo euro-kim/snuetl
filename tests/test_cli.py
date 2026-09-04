@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,3 +22,22 @@ def test_bare_configured_command_shows_dashboard(tmp_path: Path, capsys) -> None
     assert "snuetl" in output
     assert "Available commands" in output
     assert "snuetl courses" in output
+
+
+def test_sql_requires_explicit_noninteractive_source(capsys) -> None:
+    assert main(["sql", "select 1", "--json"]) == 3
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "INVALID_ARGUMENT"
+
+
+def test_capabilities_has_versioned_agent_contract(capsys) -> None:
+    assert main(["capabilities", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "1"
+    assert payload["data"]["commands"]["pull"] == [
+        "files",
+        "articles",
+        "syllabus",
+        "videos",
+        "all",
+    ]

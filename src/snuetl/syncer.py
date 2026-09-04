@@ -7,7 +7,7 @@ from pathlib import Path
 from .adapters import DiscoveryService
 from .browser import (
     authenticated_entry_url,
-    browser_looks_authenticated,
+    ensure_authenticated_page,
     open_authenticated_browser,
     persist_auth_state,
 )
@@ -30,6 +30,11 @@ def _desired_path(
     remote: RemoteFile,
     current_path: Path | None,
 ) -> Path:
+    # Existing tracked paths remain stable until `snuetl directory --move`
+    # performs an explicit, reviewed migration.
+    if current_path is not None:
+        return current_path
+
     def claimed(candidate: Path) -> bool:
         database_claim = store.path_claimed(
             candidate, course_id=course.remote_id, remote_id=remote.remote_id
@@ -45,6 +50,8 @@ def _desired_path(
         remote.name,
         remote.remote_id,
         claimed,
+        semester_code=course.semester.semester_code if course.semester else None,
+        category="files",
     )
 
 
@@ -130,9 +137,6 @@ def _sync_file(
 def synchronize(config: Config, *, headless: bool | None = None) -> SyncSummary:
     ensure_private_directory(config.state_dir)
     config.download_dir.mkdir(parents=True, exist_ok=True)
-    if not config.profile_dir.exists() or not config.auth_state_path.exists():
-        raise AuthenticationRequired("no saved authentication session; run 'snuetl login' first")
-
     summary = SyncSummary()
     run_id: int | None = None
     with profile_lock(config.lock_path), StateStore(config.database_path) as store:
@@ -141,10 +145,7 @@ def synchronize(config: Config, *, headless: bool | None = None) -> SyncSummary:
             effective_headless = config.headless if headless is None else headless
             with open_authenticated_browser(config, headless=effective_headless) as (context, page):
                 page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-                if not browser_looks_authenticated(context, page):
-                    raise AuthenticationRequired(
-                        "saved browser trust is missing or expired; rerun 'snuetl login' visibly"
-                    )
+                ensure_authenticated_page(config, context, page)
                 landing_url = page.url
                 # Capture the session immediately so a later course-level failure
                 # cannot discard cookies refreshed while opening the LMS.

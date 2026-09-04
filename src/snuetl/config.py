@@ -23,6 +23,7 @@ class Config:
     download_dir: Path
     state_dir: Path
     browser_channel: str | None
+    browser_executable_path: Path | None
     headless: bool
     timeout_seconds: float
     login_timeout_seconds: float
@@ -49,6 +50,14 @@ class Config:
     @property
     def session_metadata_path(self) -> Path:
         return self.state_dir / "session.json"
+
+    @property
+    def credentials_path(self) -> Path:
+        return self.state_dir / "credentials.json"
+
+    @property
+    def provenance_path(self) -> Path:
+        return self.state_dir / "install-provenance.json"
 
 
 def default_config_path() -> Path:
@@ -122,6 +131,16 @@ def load_config(path: Path | None = None) -> Config:
     else:
         raise ConfigError("browser.channel must be a string or 'bundled'")
 
+    executable_value = browser.get("executable_path", "")
+    if executable_value in (None, ""):
+        executable_path = None
+    elif isinstance(executable_value, str):
+        executable_path = _expand(executable_value)
+        # Playwright does not accept both a branded channel and an explicit binary.
+        channel = None
+    else:
+        raise ConfigError("browser.executable_path must be a filesystem path")
+
     headless_value = browser.get("headless", True)
     if not isinstance(headless_value, bool):
         raise ConfigError("browser.headless must be true or false")
@@ -134,6 +153,7 @@ def load_config(path: Path | None = None) -> Config:
         download_dir=_expand(general.get("download_dir", "~/Downloads/snuetl")),
         state_dir=_expand(general.get("state_dir", default_state_dir())),
         browser_channel=channel,
+        browser_executable_path=executable_path,
         headless=headless_value,
         timeout_seconds=timeout,
         login_timeout_seconds=login_timeout,
@@ -152,6 +172,7 @@ def save_config(config: Config, path: Path | None = None) -> Path:
         return json.dumps(str(value), ensure_ascii=False)
 
     channel = config.browser_channel or "bundled"
+    executable_path = str(config.browser_executable_path or "")
     excluded = ", ".join(quoted(item) for item in sorted(config.excluded_course_ids))
     body = (
         "[general]\n"
@@ -161,6 +182,7 @@ def save_config(config: Config, path: Path | None = None) -> Path:
         f"setup_complete = {'true' if config.setup_complete else 'false'}\n\n"
         "[browser]\n"
         f"channel = {quoted(channel)}\n"
+        f"executable_path = {quoted(executable_path)}\n"
         f"headless = {'true' if config.headless else 'false'}\n"
         f"login_timeout_seconds = {config.login_timeout_seconds:g}\n\n"
         "[sync]\n"

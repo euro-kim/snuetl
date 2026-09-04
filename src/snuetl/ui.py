@@ -49,14 +49,19 @@ def print_commands() -> None:
         ("snuetl articles [COURSE]", "List announcement and course-page titles"),
         ("snuetl assignments [COURSE]", "List assignments and due dates"),
         ("snuetl refresh", "Cache all paginated catalog data for SQL queries"),
-        ("snuetl query SQL", "Run read-only SQL over canonical catalog views"),
+        ("snuetl sql", "Open the interactive read-only SQL shell"),
+        ("snuetl sql --execute SQL", "Run one query over canonical catalog views"),
         ("snuetl schema", "Show canonical SQL tables and field names"),
-        ("snuetl sync", "Download new and revised files"),
+        ("snuetl pull [KIND]", "Pull files, articles, syllabi, videos, or all"),
+        ("snuetl sync", "Compatibility alias for pulling course files"),
+        ("snuetl directory [PATH]", "Show or change the managed pull directory"),
+        ("snuetl capabilities --json", "Describe the stable agent-facing interface"),
         ("snuetl status", "Show local synchronization status"),
         ("snuetl doctor", "Check dependencies and configuration"),
         ("snuetl version", "Show the installed version and source"),
         ("snuetl update", "Update this pipx installation"),
-        ("snuetl logout", "Remove this machine's trusted-browser profile"),
+        ("snuetl logout", "Remove browser authentication and saved credentials"),
+        ("snuetl uninstall", "Safely uninstall and optionally remove local data"),
     )
     for command, description in rows:
         table.add_row(f"[cyan]{command}[/cyan]", description)
@@ -117,22 +122,33 @@ def print_catalog(result: CatalogResult, kind: str) -> None:
     console.print(table)
 
 
-def print_schema() -> None:
-    table = Table(title="Canonical SQL schema", show_lines=True)
+def print_schema(table_name: str | None = None) -> None:
+    selected = tuple(item for item in SCHEMA if table_name is None or item.name == table_name)
+    if not selected:
+        console.print(f"[red]Unknown canonical table: {table_name}[/red]")
+        return
+    title = f"Canonical SQL schema: {table_name}" if table_name else "Canonical SQL schema"
+    table = Table(title=title, show_lines=True)
     table.add_column("Table", style="cyan", no_wrap=True)
     table.add_column("Canonical fields", overflow="fold")
     table.add_column("Contents")
-    for item in SCHEMA:
+    for item in selected:
         table.add_row(item.name, item.columns, item.description)
     console.print(table)
-    console.print(
-        "Example: [cyan]snuetl query --refresh "
-        "\"SELECT semester_code, course_id, file_name FROM files "
-        "WHERE semester_code = '2026-2' ORDER BY updated_at DESC\"[/cyan]"
-    )
+    if table_name is None:
+        console.print(
+            "Example: [cyan]snuetl sql --refresh --execute "
+            "\"SELECT semester_code, course_id, file_name FROM files "
+            "WHERE semester_code = '2026-2' ORDER BY updated_at DESC\"[/cyan]"
+        )
 
 
-def print_query_result(result: QueryResult, output_format: str) -> None:
+def print_query_result(
+    result: QueryResult,
+    output_format: str,
+    *,
+    limit_hint: str = "--limit 0",
+) -> None:
     if output_format == "json":
         rows = [dict(zip(result.columns, row, strict=True)) for row in result.rows]
         print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
@@ -150,14 +166,16 @@ def print_query_result(result: QueryResult, output_format: str) -> None:
         writer.writerow(result.columns)
         writer.writerows(result.rows)
     else:
-        table = Table(title=f"Query result ({len(result.rows)} rows)", show_lines=False)
+        row_count = len(result.rows)
+        noun = "row" if row_count == 1 else "rows"
+        table = Table(title=f"Query result ({row_count} {noun})", show_lines=False)
         for column in result.columns:
             table.add_column(column, overflow="fold")
         for row in result.rows:
             table.add_row(*("—" if value is None else str(value) for value in row))
         console.print(table)
     if result.truncated:
-        message = "Output limit reached; use --limit 0 or add a SQL LIMIT clause."
+        message = f"Output limit reached; use {limit_hint} or add a SQL LIMIT clause."
         if output_format == "table":
             console.print(f"[yellow]{message}[/yellow]")
         else:

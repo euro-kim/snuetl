@@ -49,6 +49,7 @@ class Course:
     semester: Semester | None = None
     starts_at: str | None = None
     ends_at: str | None = None
+    syllabus_html: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -70,6 +71,7 @@ class RemoteFile:
     size: int | None = None
     updated_at: str | None = None
     etag: str | None = None
+    content_type: str | None = None
 
     @property
     def revision(self) -> str:
@@ -117,6 +119,24 @@ class ContentItem:
     url: str
     published_at: str | None = None
     due_at: str | None = None
+    updated_at: str | None = None
+    body_html: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleItem:
+    module_id: str
+    module_name: str
+    remote_id: str
+    course_id: str
+    item_type: str
+    title: str
+    position: int | None = None
+    content_id: str | None = None
+    html_url: str | None = None
+    external_url: str | None = None
+    published: bool = True
+    locked: bool = False
 
 
 @dataclass(slots=True)

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .config import Config, ensure_private_directory
+from .credentials import load_credentials
 from .errors import AuthenticationRequired
 
 LOGGER = logging.getLogger(__name__)
@@ -25,6 +26,16 @@ TRUST_TEXT = re.compile(
     r"이\s*브라우저에서\s*추가\s*인증\s*사용\s*안함|"
     r"(do not|don't)\s+(use|require).*(verification|authentication).*(browser|device)",
     re.IGNORECASE,
+)
+PASSWORD_CHANGE_LATER_TEXT = re.compile(
+    r"나중에\s*(변경|하기)?|다음에\s*(변경|하기)?|"
+    r"change\s+later|later|skip|remind\s+me\s+later",
+    re.IGNORECASE,
+)
+PASSWORD_CHANGE_REQUIRED_TEXT = re.compile(
+    r"비밀번호.{0,30}(만료|변경.{0,15}(필요|안내|권장|주기))|"
+    r"password.{0,40}(expired|must\s+be\s+changed|change\s+required)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -54,7 +65,9 @@ def persistent_browser(config: Config, *, headless: bool) -> Iterator[tuple[Any,
                 "--no-default-browser-check",
             ],
         }
-        if config.browser_channel:
+        if config.browser_executable_path:
+            kwargs["executable_path"] = str(config.browser_executable_path)
+        elif config.browser_channel:
             kwargs["channel"] = config.browser_channel
         context = playwright.chromium.launch_persistent_context(**kwargs)
         _restore_auth_state(context, config)
@@ -242,25 +255,25 @@ def _find_two_factor_container(page: Any) -> Any | None:
     return visible[0] if visible else None
 
 
-def _ensure_trusted_browser_checked(page: Any, container: Any) -> bool:
+def _set_trusted_browser(page: Any, container: Any, enabled: bool) -> bool:
     exact = _first_visible(page.locator("#bypass_check"))
     if exact is not None:
-        exact.check()
-        return exact.is_checked()
+        exact.check() if enabled else exact.uncheck()
+        return exact.is_checked() is enabled
 
     for scope in (container, page):
         try:
             by_label = scope.get_by_label(TRUST_TEXT)
             checkbox = _first_visible(by_label)
             if checkbox is not None:
-                checkbox.check()
-                return checkbox.is_checked()
+                checkbox.check() if enabled else checkbox.uncheck()
+                return checkbox.is_checked() is enabled
         except Exception:
             pass
 
     try:
         trust_label = _first_visible(container.get_by_text(TRUST_TEXT))
-        if trust_label is not None:
+        if trust_label is not None and enabled:
             trust_label.click()
             checkboxes = container.locator("input[type='checkbox']")
             for index in range(checkboxes.count() - 1, -1, -1):
@@ -277,9 +290,10 @@ def _ensure_trusted_browser_checked(page: Any, container: Any) -> bool:
         checkboxes.nth(i) for i in range(checkboxes.count()) if checkboxes.nth(i).is_visible()
     ]
     if len(visible) == 1:
-        visible[0].check()
-        return visible[0].is_checked()
-    return False
+        visible[0].check() if enabled else visible[0].uncheck()
+        return visible[0].is_checked() is enabled
+    # If trust was declined, an absent checkbox already satisfies that choice.
+    return not enabled
 
 
 def _click_named(page: Any, container: Any, pattern: re.Pattern[str]) -> None:
@@ -334,15 +348,39 @@ def _submit_two_factor_code(
     if field is None:
         raise AuthenticationRequired("could not find the SNU verification-code field")
     field.fill(code)
-    if not _ensure_trusted_browser_checked(page, container):
-        raise AuthenticationRequired(
-            "could not enable 'do not require additional authentication in this browser'"
-        )
     _click_named(
         page,
         container,
         re.compile(r"인증\s*확인|confirm\s+(verification|authentication)", re.IGNORECASE),
     )
+
+
+def _handle_password_change_prompt(page: Any) -> bool:
+    """Dismiss an optional password-change reminder or report a mandatory one."""
+    try:
+        body = page.locator("body").inner_text() or ""
+    except Exception:
+        return False
+    later = None
+    for locator in (
+        page.get_by_role("button", name=PASSWORD_CHANGE_LATER_TEXT),
+        page.get_by_role("link", name=PASSWORD_CHANGE_LATER_TEXT),
+        page.get_by_text(PASSWORD_CHANGE_LATER_TEXT, exact=True),
+    ):
+        later = _first_visible(locator)
+        if later is not None:
+            break
+    if later is not None and re.search(r"비밀번호|password", body, re.IGNORECASE):
+        later.click()
+        LOGGER.warning("SNU requested a password change; selected the change-later option")
+        return True
+    if PASSWORD_CHANGE_REQUIRED_TEXT.search(body):
+        raise AuthenticationRequired(
+            "SNU requires a password change and no safe 'change later' action was found. "
+            "Change the password on the SNU website, then run 'snuetl login' to update "
+            "the saved credential."
+        )
+    return False
 
 
 def canvas_profile_is_authenticated(context: Any, origin: str) -> bool:
@@ -379,112 +417,154 @@ def browser_looks_authenticated(context: Any, page: Any) -> bool:
     return _first_visible(markers) is not None
 
 
+def _login_page(
+    config: Config,
+    context: Any,
+    page: Any,
+    username: str,
+    password: str,
+    *,
+    trust_browser: bool,
+    two_factor_method_provider: Callable[[], str] | None = None,
+    verification_code_provider: Callable[[], str] | None = None,
+) -> str:
+    entry_url = authenticated_entry_url(config)
+    page.goto(entry_url, wait_until="domcontentloaded")
+    if browser_looks_authenticated(context, page):
+        persist_auth_state(context, config, page.url)
+        LOGGER.info("browser profile is already authenticated")
+        return page.url
+    if entry_url != config.base_url:
+        page.goto(config.base_url, wait_until="domcontentloaded")
+    form_deadline = time.monotonic() + min(config.login_timeout_seconds, 45)
+    username_field = None
+    password_field = None
+    while time.monotonic() < form_deadline:
+        if browser_looks_authenticated(context, page):
+            persist_auth_state(context, config, page.url)
+            LOGGER.info("browser profile is already authenticated")
+            return page.url
+        _select_id_tab(page)
+        username_field = _find_username_field(page)
+        password_field = _visible_password_field(page)
+        if username_field is not None and password_field is not None:
+            break
+        time.sleep(0.25)
+    if username_field is None or password_field is None:
+        host = urlsplit(page.url).hostname or "unknown host"
+        raise AuthenticationRequired(
+            f"could not find visible SNU ID/password fields after redirect ({host})"
+        )
+    username_field.fill(username)
+    password_field.fill(password)
+    _submit_login(page)
+
+    deadline = time.monotonic() + config.login_timeout_seconds
+    announced = False
+    trust_configured = False
+    delivery_sent = False
+    verification_attempts = 0
+    last_verification_attempt = 0.0
+    while time.monotonic() < deadline:
+        if browser_looks_authenticated(context, page):
+            persist_auth_state(context, config, page.url)
+            LOGGER.info("SNU eTL authentication completed")
+            return page.url
+        if _handle_password_change_prompt(page):
+            time.sleep(0.5)
+            continue
+
+        container = _find_two_factor_container(page)
+        if container is not None:
+            if not trust_configured:
+                if not _set_trusted_browser(page, container, trust_browser):
+                    action = "enable" if trust_browser else "disable"
+                    raise AuthenticationRequired(
+                        f"could not {action} trusted-browser authentication"
+                    )
+                trust_configured = True
+                LOGGER.info(
+                    "%s 'do not require additional authentication in this browser'",
+                    "enabled" if trust_browser else "disabled",
+                )
+            if not (two_factor_method_provider and verification_code_provider):
+                raise AuthenticationRequired(
+                    "SNU requires additional verification again. Run 'snuetl login' "
+                    "interactively to enter a new email or phone code."
+                )
+            if not delivery_sent:
+                method = two_factor_method_provider().strip().casefold()
+                if method not in {"email", "phone"}:
+                    raise AuthenticationRequired("2FA method must be 'email' or 'phone'")
+                _send_two_factor_code(page, container, method)
+                delivery_sent = True
+                LOGGER.info("SNU verification code requested by %s", method)
+            now = time.monotonic()
+            if verification_attempts == 0 or now - last_verification_attempt >= 5:
+                if verification_attempts >= 3:
+                    raise AuthenticationRequired(
+                        "SNU did not accept the verification code after three attempts"
+                    )
+                _submit_two_factor_code(page, container, verification_code_provider)
+                verification_attempts += 1
+                last_verification_attempt = time.monotonic()
+                LOGGER.info("submitted verification code; waiting for SNU")
+            announced = True
+        elif not announced and _login_was_rejected(page):
+            raise AuthenticationRequired(
+                "SNU rejected the saved ID or password. Run 'snuetl login' to update it."
+            )
+        elif announced and _on_sso(page):
+            pass
+        time.sleep(0.5)
+
+    raise AuthenticationRequired(
+        "login did not complete before the configured timeout; rerun 'snuetl login'"
+    )
+
+
 def interactive_login(
     config: Config,
     username: str,
     password: str,
     *,
     headless: bool = False,
+    trust_browser: bool = True,
     two_factor_method_provider: Callable[[], str] | None = None,
     verification_code_provider: Callable[[], str] | None = None,
 ) -> str:
     """Enroll the persistent browser profile and return the landing URL."""
     with persistent_browser(config, headless=headless) as (context, page):
-        entry_url = authenticated_entry_url(config)
-        page.goto(entry_url, wait_until="domcontentloaded")
-        if browser_looks_authenticated(context, page):
-            persist_auth_state(context, config, page.url)
-            LOGGER.info("browser profile is already authenticated")
-            return page.url
-        if entry_url != config.base_url:
-            page.goto(config.base_url, wait_until="domcontentloaded")
-        form_deadline = time.monotonic() + min(config.login_timeout_seconds, 45)
-        username_field = None
-        password_field = None
-        while time.monotonic() < form_deadline:
-            if browser_looks_authenticated(context, page):
-                persist_auth_state(context, config, page.url)
-                LOGGER.info("browser profile is already authenticated")
-                return page.url
-            _select_id_tab(page)
-            username_field = _find_username_field(page)
-            password_field = _visible_password_field(page)
-            if username_field is not None and password_field is not None:
-                break
-            # The eTL entry point can finish loading before its redirect to the
-            # SNU SSO page. Re-check the new document instead of assuming the
-            # first DOM is the login form.
-            time.sleep(0.25)
-        if username_field is None or password_field is None:
-            host = urlsplit(page.url).hostname or "unknown host"
-            raise AuthenticationRequired(
-                f"could not find visible SNU ID/password fields after redirect ({host})"
-            )
-        username_field.fill(username)
-        password_field.fill(password)
-        _submit_login(page)
-
-        deadline = time.monotonic() + config.login_timeout_seconds
-        announced = False
-        trust_checked = False
-        delivery_sent = False
-        verification_attempts = 0
-        last_verification_attempt = 0.0
-        while time.monotonic() < deadline:
-            if browser_looks_authenticated(context, page):
-                persist_auth_state(context, config, page.url)
-                LOGGER.info("SNU eTL authentication completed")
-                return page.url
-
-            container = _find_two_factor_container(page)
-            if container is not None:
-                if not trust_checked:
-                    trust_checked = _ensure_trusted_browser_checked(page, container)
-                    if trust_checked:
-                        LOGGER.info(
-                            "enabled 'do not require additional authentication in this browser'"
-                        )
-                    else:
-                        LOGGER.warning(
-                            "could not select the trusted-browser checkbox automatically; "
-                            "select it before confirming the verification code"
-                        )
-                if two_factor_method_provider and verification_code_provider:
-                    if not delivery_sent:
-                        method = two_factor_method_provider().strip().casefold()
-                        if method not in {"email", "phone"}:
-                            raise AuthenticationRequired("2FA method must be 'email' or 'phone'")
-                        _send_two_factor_code(page, container, method)
-                        delivery_sent = True
-                        LOGGER.info("SNU verification code requested by %s", method)
-                    now = time.monotonic()
-                    if verification_attempts == 0 or now - last_verification_attempt >= 5:
-                        if verification_attempts >= 3:
-                            raise AuthenticationRequired(
-                                "SNU did not accept the verification code after three attempts"
-                            )
-                        _submit_two_factor_code(page, container, verification_code_provider)
-                        verification_attempts += 1
-                        last_verification_attempt = time.monotonic()
-                        LOGGER.info("submitted verification code; waiting for SNU")
-                if not announced:
-                    if not (two_factor_method_provider and verification_code_provider):
-                        LOGGER.info(
-                            "complete email or phone verification in the browser; "
-                            "this command will wait"
-                        )
-                    announced = True
-            elif not announced and _login_was_rejected(page):
-                raise AuthenticationRequired("SNU rejected the ID or password")
-            elif announced and _on_sso(page):
-                # The modal can close briefly during navigation. Keep waiting for
-                # either the LMS or an SSO error page.
-                pass
-            time.sleep(0.5)
-
-        raise AuthenticationRequired(
-            "login did not complete before the configured timeout; rerun 'snuetl login'"
+        return _login_page(
+            config,
+            context,
+            page,
+            username,
+            password,
+            trust_browser=trust_browser,
+            two_factor_method_provider=two_factor_method_provider,
+            verification_code_provider=verification_code_provider,
         )
+
+
+def ensure_authenticated_page(config: Config, context: Any, page: Any) -> None:
+    """Use saved credentials when the persistent SNU session has expired."""
+    if browser_looks_authenticated(context, page):
+        return
+    credentials = load_credentials(config)
+    if credentials is None:
+        raise AuthenticationRequired(
+            "the SNU session expired and no credentials are saved; run 'snuetl login'"
+        )
+    LOGGER.info("SNU session expired; signing in automatically with saved credentials")
+    _login_page(
+        config,
+        context,
+        page,
+        credentials.username,
+        credentials.password,
+        trust_browser=credentials.trust_browser,
+    )
 
 
 def open_authenticated_browser(config: Config, *, headless: bool) -> Any:

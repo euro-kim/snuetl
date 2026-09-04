@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -13,8 +14,10 @@ from rich.table import Table
 from .browser import _playwright, interactive_login
 from .catalog import inspect_catalog
 from .config import Config, default_config_path, load_config, save_config
+from .credentials import SavedCredentials, load_credentials, save_credentials
 from .errors import AuthenticationRequired
 from .profile import profile_lock
+from .provenance import record_apt_package, record_playwright_browser
 from .scheduler import install_user_timer, timer_is_enabled
 from .ui import console, print_banner, print_catalog, print_commands
 
@@ -23,15 +26,105 @@ def display_available() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def is_arm64() -> bool:
+    return platform.machine().casefold() in {"aarch64", "arm64"}
+
+
+def is_raspberry_pi() -> bool:
+    if not is_arm64() or platform.system() != "Linux":
+        return False
+    for path in (Path("/proc/device-tree/model"), Path("/sys/firmware/devicetree/base/model")):
+        try:
+            if "raspberry pi" in path.read_text(encoding="utf-8", errors="ignore").casefold():
+                return True
+        except OSError:
+            continue
+    try:
+        os_release = Path("/etc/os-release").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return "raspbian" in os_release.casefold()
+
+
+def find_system_chromium() -> Path | None:
+    for name in ("chromium", "chromium-browser"):
+        executable = shutil.which(name)
+        if executable:
+            return Path(executable).resolve()
+    return None
+
+
+def _with_system_chromium(config: Config, executable: Path) -> Config:
+    return replace(config, browser_channel=None, browser_executable_path=executable)
+
+
+def _install_raspberry_pi_chromium(config: Config | None = None) -> Path | None:
+    apt_get = shutil.which("apt-get")
+    if apt_get is None:
+        return None
+    prefix: list[str] = []
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        sudo = shutil.which("sudo")
+        if sudo is None:
+            return None
+        prefix = [sudo]
+    console.print("[cyan]Installing Raspberry Pi OS Chromium…[/cyan]")
+    try:
+        subprocess.run([*prefix, apt_get, "update"], check=True)
+        subprocess.run([*prefix, apt_get, "install", "-y", "chromium"], check=True)
+    except subprocess.CalledProcessError as exc:
+        console.print(
+            f"[yellow]![/yellow] Raspberry Pi Chromium installation failed "
+            f"(exit {exc.returncode}); trying Playwright Chromium"
+        )
+        return None
+    if config is not None:
+        record_apt_package(config, "chromium")
+    return find_system_chromium()
+
+
+def ensure_ffmpeg(config: Config) -> bool:
+    if shutil.which("ffmpeg"):
+        return True
+    if platform.system() != "Linux" or shutil.which("apt-get") is None:
+        console.print(
+            "[yellow]![/yellow] FFmpeg is unavailable; video pulls that need merging will fail"
+        )
+        return False
+    if not Confirm.ask("Install FFmpeg for lecture-video downloads (sudo may prompt)?", default=True):
+        return False
+    apt_get = shutil.which("apt-get")
+    prefix: list[str] = []
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        sudo = shutil.which("sudo")
+        if sudo is None:
+            console.print("[yellow]![/yellow] sudo is unavailable; install FFmpeg manually")
+            return False
+        prefix = [sudo]
+    try:
+        subprocess.run([*prefix, str(apt_get), "update"], check=True)
+        subprocess.run([*prefix, str(apt_get), "install", "-y", "ffmpeg"], check=True)
+    except subprocess.CalledProcessError:
+        console.print("[yellow]![/yellow] FFmpeg installation failed")
+        return False
+    record_apt_package(config, "ffmpeg")
+    console.print("[green]✓[/green] FFmpeg is ready")
+    return True
+
+
 def browser_available(config: Config) -> tuple[bool, str]:
     try:
         with _playwright()() as playwright:
             kwargs: dict[str, object] = {"headless": True}
-            if config.browser_channel:
+            if config.browser_executable_path:
+                kwargs["executable_path"] = str(config.browser_executable_path)
+            elif config.browser_channel:
                 kwargs["channel"] = config.browser_channel
             browser = playwright.chromium.launch(**kwargs)
             browser.close()
-        return True, "ready"
+        if config.browser_executable_path:
+            return True, f"ready (system Chromium: {config.browser_executable_path})"
+        return True, f"ready (Playwright Chromium; {platform.machine()})"
     except Exception as exc:
         return False, str(exc).splitlines()[0]
 
@@ -42,22 +135,62 @@ def ensure_browser(config: Config) -> Config:
         console.print("[green]✓[/green] Chromium runtime is ready")
         return config
 
+    if config.browser_executable_path:
+        console.print(
+            f"[yellow]![/yellow] Chromium at {config.browser_executable_path} is unavailable"
+        )
+        config = replace(config, browser_executable_path=None)
+
     if config.browser_channel:
         console.print(
             f"[yellow]![/yellow] Browser channel {config.browser_channel!r} is unavailable; "
             "switching to Playwright Chromium"
         )
-        config = replace(config, browser_channel=None)
+        config = replace(config, browser_channel=None, browser_executable_path=None)
 
-    console.print("[cyan]Installing the managed Chromium browser…[/cyan]")
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    system_chromium = find_system_chromium() if is_arm64() else None
+    if system_chromium is not None:
+        system_config = _with_system_chromium(config, system_chromium)
+        ready, _ = browser_available(system_config)
+        if ready:
+            console.print(
+                f"[green]✓[/green] Using ARM64 system Chromium at [dim]{system_chromium}[/dim]"
+            )
+            return system_config
+
+    if is_raspberry_pi() and Confirm.ask(
+        "Install the Raspberry Pi OS Chromium package now (sudo may prompt)?",
+        default=True,
+    ):
+        executable = _install_raspberry_pi_chromium(config)
+        if executable is not None:
+            system_config = _with_system_chromium(config, executable)
+            ready, _ = browser_available(system_config)
+            if ready:
+                console.print(
+                    f"[green]✓[/green] Raspberry Pi ARM64 Chromium installed at "
+                    f"[dim]{executable}[/dim]"
+                )
+                return system_config
+
+    architecture = platform.machine() or "unknown architecture"
+    console.print(f"[cyan]Installing Playwright Chromium for {architecture}…[/cyan]")
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        record_playwright_browser(config)
+    except subprocess.CalledProcessError:
+        if is_arm64():
+            executable = find_system_chromium()
+            if executable is not None:
+                return _with_system_chromium(config, executable)
+        raise
     ready, reason = browser_available(config)
     if ready:
         console.print("[green]✓[/green] Chromium installed")
         return config
 
     if platform.system() == "Linux" and Confirm.ask(
-        "Chromium needs Ubuntu system libraries. Install them now (sudo may prompt)?",
+        "Chromium needs Linux system libraries. Install them now (sudo may prompt)?",
         default=True,
     ):
         subprocess.run(
@@ -74,14 +207,33 @@ def ensure_browser(config: Config) -> Config:
 def prompt_login(config: Config, *, headless: bool) -> None:
     console.rule("[bold]SNU authentication")
     console.print(
-        "Credentials and verification codes are used only for this login and are never saved."
+        "Verification codes are used only for this login and are never saved."
     )
-    username = ""
-    while not username:
-        username = Prompt.ask("SNU ID").strip()
-    password = ""
-    while not password:
-        password = Prompt.ask("SNU password", password=True)
+    saved = load_credentials(config)
+    use_saved = saved is not None and Confirm.ask(
+        f"Use the saved SNU credentials for {saved.username}?",
+        default=True,
+    )
+    if use_saved and saved is not None:
+        username = saved.username
+        password = saved.password
+    else:
+        username = ""
+        while not username:
+            username = Prompt.ask("SNU ID", default=saved.username if saved else None).strip()
+        password = ""
+        while not password:
+            password = Prompt.ask("SNU password", password=True)
+
+    save_login = Confirm.ask(
+        "Save the SNU ID and password in a plaintext owner-only file for automatic re-login? "
+        f"(owner-only file: {config.credentials_path})",
+        default=True,
+    )
+    trust_browser = Confirm.ask(
+        "Trust this device so SNU does not request 2FA on routine re-logins?",
+        default=saved.trust_browser if use_saved and saved is not None else True,
+    )
 
     def method_provider() -> str:
         return Prompt.ask(
@@ -98,10 +250,21 @@ def prompt_login(config: Config, *, headless: bool) -> None:
         username,
         password,
         headless=headless,
+        trust_browser=trust_browser,
         two_factor_method_provider=method_provider,
         verification_code_provider=code_provider,
     )
-    console.print("[green]✓[/green] SNU login and trusted-browser enrollment verified")
+    if save_login:
+        save_credentials(config, SavedCredentials(username, password, trust_browser))
+        console.print(
+            "[green]✓[/green] Credentials saved for automatic re-login "
+            f"[dim]({config.credentials_path})[/dim]"
+        )
+    elif saved is not None:
+        config.credentials_path.unlink(missing_ok=True)
+        console.print("[yellow]![/yellow] Previously saved credentials removed")
+    trust_status = "trusted-device enrollment" if trust_browser else "login"
+    console.print(f"[green]✓[/green] SNU {trust_status} verified")
 
 
 def run_setup(config_path: Path | None = None, *, force_headless: bool | None = None) -> int:
@@ -112,6 +275,7 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
 
     console.rule("[bold]1. Environment")
     config = ensure_browser(config)
+    ensure_ffmpeg(config)
 
     console.rule("[bold]2. Storage")
     download_answer = Prompt.ask(
@@ -131,7 +295,11 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
     else:
         login_headless = force_headless
 
-    needs_login = not config.profile_dir.exists() or not config.auth_state_path.exists()
+    needs_login = (
+        not config.profile_dir.exists()
+        or not config.auth_state_path.exists()
+        or load_credentials(config) is None
+    )
     if not needs_login:
         needs_login = Confirm.ask("Refresh SNU authentication now?", default=False)
     if needs_login:
@@ -171,12 +339,28 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
     path = config_path or default_config_path()
     checks: list[tuple[str, bool, str]] = []
     checks.append(("Configuration", path.exists(), str(path)))
+    machine = platform.machine() or "unknown"
+    supported_architecture = machine.casefold() in {"x86_64", "amd64", "aarch64", "arm64"}
+    architecture_detail = f"{platform.system()} {machine}"
+    if is_arm64():
+        architecture_detail += " (ARM64 supported)"
+    checks.append(("Architecture", supported_architecture, architecture_detail))
     browser_ok, browser_detail = browser_available(config)
     checks.append(("Chromium", browser_ok, browser_detail))
+    ffmpeg = shutil.which("ffmpeg")
+    checks.append(("FFmpeg", ffmpeg is not None, ffmpeg or "not installed (video pulls limited)"))
     auth_ready = config.profile_dir.exists() and config.auth_state_path.exists()
     checks.append(("Authentication state", auth_ready, str(config.state_dir)))
     checks.append(("Download directory", config.download_dir.exists(), str(config.download_dir)))
     core_check_count = len(checks)
+    saved = load_credentials(config)
+    checks.append(
+        (
+            "Automatic re-login (optional)",
+            saved is not None,
+            f"saved for {saved.username}" if saved else "credentials not saved",
+        )
+    )
     if platform.system() == "Linux":
         enabled = timer_is_enabled()
         checks.append(

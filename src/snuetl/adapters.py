@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlsplit
 
 from .errors import AuthenticationRequired, DiscoveryError
-from .models import ContentItem, Course, RemoteFile, semester_from_term
+from .models import ContentItem, Course, ModuleItem, RemoteFile, semester_from_term
 
 LOGGER = logging.getLogger(__name__)
 COURSE_PATH = re.compile(r"/courses/([^/?#]+)")
@@ -86,6 +86,25 @@ class CanvasApiAdapter:
             url = _parse_next_link(response.headers.get("link"))
         return values
 
+    def _get_object(self, path: str) -> dict[str, Any]:
+        url = urljoin(f"{self.origin}/", path.lstrip("/"))
+        response = self.context.request.get(url, timeout=self.timeout_ms)
+        if response.status == 401:
+            raise AuthenticationRequired("the eTL session is missing or expired")
+        if response.status == 403:
+            raise DiscoveryError("eTL denied access to this content")
+        if response.status == 404:
+            raise AdapterUnavailable("Canvas API endpoint is not available")
+        if not 200 <= response.status < 300:
+            raise DiscoveryError(f"eTL API returned HTTP {response.status}")
+        try:
+            payload = _response_json(response)
+        except Exception as exc:
+            raise AdapterUnavailable("eTL API did not return JSON") from exc
+        if not isinstance(payload, dict):
+            raise AdapterUnavailable("eTL API returned an unexpected object")
+        return payload
+
     def probe(self) -> bool:
         response = self.context.request.get(
             f"{self.origin}/api/v1/users/self/profile", timeout=min(self.timeout_ms, 15_000)
@@ -102,7 +121,8 @@ class CanvasApiAdapter:
 
     def discover_courses(self) -> list[Course]:
         payload = self._get_pages(
-            "/api/v1/courses?enrollment_state=active&state[]=available&include[]=term&per_page=100"
+            "/api/v1/courses?enrollment_state=active&state[]=available&"
+            "include[]=term&include[]=syllabus_body&per_page=100"
         )
         courses: list[Course] = []
         for item in payload:
@@ -119,6 +139,7 @@ class CanvasApiAdapter:
                     semester=semester_from_term(item.get("term")),
                     starts_at=str(item.get("start_at") or "") or None,
                     ends_at=str(item.get("end_at") or "") or None,
+                    syllabus_html=str(item.get("syllabus_body") or "") or None,
                 )
             )
         return courses
@@ -177,6 +198,8 @@ class CanvasApiAdapter:
                     size=size,
                     updated_at=str(item.get("updated_at") or item.get("modified_at") or "") or None,
                     etag=str(item.get("etag") or "") or None,
+                    content_type=str(item.get("content-type") or item.get("content_type") or "")
+                    or None,
                 )
             )
         return files
@@ -213,6 +236,23 @@ class CanvasApiAdapter:
                 item_url = str(item.get("html_url") or "")
                 if not item_url and kind == "page" and item.get("url"):
                     item_url = f"{self.origin}/courses/{course_id}/pages/{quote(str(item['url']), safe='')}"
+                detail = item
+                if kind == "page" and not item.get("body") and item.get("url"):
+                    try:
+                        detail = self._get_object(
+                            f"/api/v1/courses/{course_id}/pages/{quote(str(item['url']), safe='')}"
+                        )
+                    except (DiscoveryError, AdapterUnavailable) as exc:
+                        LOGGER.warning(
+                            "could not fetch page body course=%s page=%s error=%s",
+                            course.name,
+                            title,
+                            exc,
+                        )
+                    except Exception as exc:
+                        # Page detail is optional enrichment; retain the list
+                        # result when a deployment omits this endpoint.
+                        LOGGER.debug("page body enrichment unavailable: %s", exc)
                 items.append(
                     ContentItem(
                         remote_id=remote_id,
@@ -227,11 +267,55 @@ class CanvasApiAdapter:
                             or ""
                         )
                         or None,
+                        updated_at=str(detail.get("updated_at") or "") or None,
+                        body_html=str(detail.get("message") or detail.get("body") or "") or None,
                     )
                 )
         if successful_sources == 0:
             raise AdapterUnavailable("article API endpoints are unavailable")
         return items
+
+    def discover_modules(self, course: Course) -> list[ModuleItem]:
+        course_id = quote(course.remote_id, safe="")
+        modules = self._get_pages(
+            f"/api/v1/courses/{course_id}/modules?include[]=items&"
+            "include[]=content_details&per_page=100"
+        )
+        result: list[ModuleItem] = []
+        for module in modules:
+            if not isinstance(module, dict) or module.get("id") is None:
+                continue
+            module_id = str(module["id"])
+            raw_items = module.get("items")
+            if not isinstance(raw_items, list):
+                raw_items = self._get_pages(
+                    f"/api/v1/courses/{course_id}/modules/{quote(module_id, safe='')}/items?"
+                    "include[]=content_details&per_page=100"
+                )
+            for item in raw_items:
+                if not isinstance(item, dict) or item.get("id") is None:
+                    continue
+                lock_info = item.get("content_details")
+                locked = bool(isinstance(lock_info, dict) and lock_info.get("locked_for_user"))
+                result.append(
+                    ModuleItem(
+                        module_id=module_id,
+                        module_name=str(module.get("name") or f"Module {module_id}"),
+                        remote_id=str(item["id"]),
+                        course_id=course.remote_id,
+                        item_type=str(item.get("type") or "Unknown"),
+                        title=str(item.get("title") or f"Item {item['id']}"),
+                        position=int(item["position"]) if item.get("position") is not None else None,
+                        content_id=str(item.get("content_id"))
+                        if item.get("content_id") is not None
+                        else None,
+                        html_url=str(item.get("html_url") or "") or None,
+                        external_url=str(item.get("external_url") or "") or None,
+                        published=bool(item.get("published", True)),
+                        locked=locked,
+                    )
+                )
+        return result
 
     def discover_assignments(self, course: Course) -> list[ContentItem]:
         course_id = quote(course.remote_id, safe="")
@@ -422,6 +506,43 @@ class DomAdapter:
                 continue
         return list(found.values())
 
+    def discover_modules(self, course: Course) -> list[ModuleItem]:
+        self.page.goto(f"{course.url.rstrip('/')}/modules", wait_until="domcontentloaded")
+        anchors = self.page.locator(
+            "a[href*='/modules/items/'], a[href*='/external_tools/'], "
+            "a[href*='/learningx/lti/']"
+        )
+        found: dict[str, ModuleItem] = {}
+        for index in range(anchors.count()):
+            anchor = anchors.nth(index)
+            try:
+                href = anchor.get_attribute("href") or ""
+                title = (anchor.inner_text() or anchor.get_attribute("title") or "").strip()
+                if not href or not title:
+                    continue
+                match = re.search(r"/(?:items|view)/(\d+)", href)
+                remote_id = match.group(1) if match else str(index + 1)
+                item_type = "ExternalTool" if "external" in href or "/lti/" in href else "Page"
+                found.setdefault(
+                    remote_id,
+                    ModuleItem(
+                        module_id="dom",
+                        module_name="Modules",
+                        remote_id=remote_id,
+                        course_id=course.remote_id,
+                        item_type=item_type,
+                        title=title,
+                        position=index + 1,
+                        html_url=urljoin(f"{self.origin}/", href),
+                        external_url=urljoin(f"{self.origin}/", href)
+                        if item_type == "ExternalTool"
+                        else None,
+                    ),
+                )
+            except Exception:
+                continue
+        return list(found.values())
+
 
 class DiscoveryService:
     def __init__(self, context: Any, page: Any, *, timeout_seconds: float):
@@ -466,3 +587,11 @@ class DiscoveryService:
             except DiscoveryError:
                 LOGGER.warning("API unavailable for assignments in course=%s", course.name)
         return self.dom.discover_assignments(course)
+
+    def discover_modules(self, course: Course) -> list[ModuleItem]:
+        if self.use_api:
+            try:
+                return self.api.discover_modules(course)
+            except DiscoveryError:
+                LOGGER.warning("API unavailable for modules in course=%s", course.name)
+        return self.dom.discover_modules(course)

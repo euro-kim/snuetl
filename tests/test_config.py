@@ -24,6 +24,7 @@ download_dir = "~/etl-files"
 state_dir = "~/etl-state"
 [browser]
 channel = "chrome"
+executable_path = "/usr/bin/chromium"
 headless = false
 login_timeout_seconds = 120
 [sync]
@@ -35,7 +36,8 @@ excluded_course_ids = [123, "abc"]
     )
     config = load_config(path)
     assert config.base_url == "https://etl.snu.ac.kr/login"
-    assert config.browser_channel == "chrome"
+    assert config.browser_channel is None
+    assert config.browser_executable_path == Path("/usr/bin/chromium")
     assert config.headless is False
     assert config.excluded_course_ids == frozenset({"123", "abc"})
 
@@ -57,10 +59,16 @@ def test_rejects_string_boolean(tmp_path: Path) -> None:
 def test_save_config_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "private" / "config.toml"
     original = load_config(tmp_path / "missing.toml")
-    saved = replace(original, download_dir=tmp_path / "강의 자료", setup_complete=True)
+    saved = replace(
+        original,
+        download_dir=tmp_path / "강의 자료",
+        browser_executable_path=Path("/usr/bin/chromium"),
+        setup_complete=True,
+    )
     save_config(saved, path)
     loaded = load_config(path)
     assert loaded.download_dir == tmp_path / "강의 자료"
+    assert loaded.browser_executable_path == Path("/usr/bin/chromium")
     assert loaded.setup_complete is True
     assert path.stat().st_mode & 0o777 == 0o600
 

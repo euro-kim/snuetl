@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import ContentItem, Course, RemoteFile, StoredFile
+from .models import ContentItem, Course, ModuleItem, RemoteFile, StoredFile
 
 
 def utc_now() -> str:
@@ -106,6 +106,38 @@ class StateStore:
                 PRIMARY KEY (course_id, content_type, content_id),
                 FOREIGN KEY (course_id) REFERENCES courses(remote_id)
             );
+            CREATE TABLE IF NOT EXISTS catalog_module_items (
+                course_id TEXT NOT NULL,
+                module_id TEXT NOT NULL,
+                module_name TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                position INTEGER,
+                content_id TEXT,
+                html_url TEXT,
+                external_url TEXT,
+                published INTEGER NOT NULL DEFAULT 1,
+                locked INTEGER NOT NULL DEFAULT 0,
+                available INTEGER NOT NULL DEFAULT 1,
+                last_seen_at TEXT NOT NULL,
+                PRIMARY KEY (course_id, module_id, item_id),
+                FOREIGN KEY (course_id) REFERENCES courses(remote_id)
+            );
+            CREATE TABLE IF NOT EXISTS pull_artifacts (
+                artifact_type TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                sha256 TEXT,
+                size_bytes INTEGER,
+                status TEXT NOT NULL,
+                error TEXT,
+                last_seen_at TEXT NOT NULL,
+                PRIMARY KEY (artifact_type, course_id, source_id),
+                FOREIGN KEY (course_id) REFERENCES courses(remote_id)
+            );
             CREATE TABLE IF NOT EXISTS catalog_refreshes (
                 scope TEXT PRIMARY KEY,
                 refreshed_at TEXT NOT NULL,
@@ -130,6 +162,10 @@ class StateStore:
         self._ensure_column("courses", "semester_id", "TEXT")
         self._ensure_column("courses", "starts_at", "TEXT")
         self._ensure_column("courses", "ends_at", "TEXT")
+        self._ensure_column("courses", "syllabus_html", "TEXT")
+        self._ensure_column("catalog_files", "content_type", "TEXT")
+        self._ensure_column("catalog_content_items", "updated_at", "TEXT")
+        self._ensure_column("catalog_content_items", "body_html", "TEXT")
         self.db.commit()
 
     def _ensure_column(self, table: str, column: str, declaration: str) -> None:
@@ -202,12 +238,13 @@ class StateStore:
         self.db.execute(
             """INSERT INTO courses(
                  remote_id, name, url, course_code, semester_id, starts_at, ends_at,
-                 active, last_seen_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                 syllabus_html, active, last_seen_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                ON CONFLICT(remote_id) DO UPDATE SET
                  name=excluded.name, url=excluded.url, course_code=excluded.course_code,
                  semester_id=excluded.semester_id, starts_at=excluded.starts_at,
-                 ends_at=excluded.ends_at, active=1, last_seen_at=excluded.last_seen_at""",
+                 ends_at=excluded.ends_at, syllabus_html=excluded.syllabus_html,
+                 active=1, last_seen_at=excluded.last_seen_at""",
             (
                 course.remote_id,
                 course.name,
@@ -216,6 +253,7 @@ class StateStore:
                 course.semester.semester_id if course.semester else None,
                 course.starts_at,
                 course.ends_at,
+                course.syllabus_html,
                 now,
             ),
         )
@@ -240,13 +278,15 @@ class StateStore:
             self.db.execute(
                 """INSERT INTO catalog_files(
                      file_id, course_id, file_name, folder_path, remote_path,
-                     download_url, size_bytes, updated_at, etag, available, last_seen_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                     download_url, size_bytes, updated_at, etag, content_type,
+                     available, last_seen_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                    ON CONFLICT(course_id, file_id) DO UPDATE SET
                      file_name=excluded.file_name, folder_path=excluded.folder_path,
                      remote_path=excluded.remote_path, download_url=excluded.download_url,
                      size_bytes=excluded.size_bytes, updated_at=excluded.updated_at,
-                     etag=excluded.etag, available=1, last_seen_at=excluded.last_seen_at""",
+                     etag=excluded.etag, content_type=excluded.content_type,
+                     available=1, last_seen_at=excluded.last_seen_at""",
                 (
                     remote.remote_id,
                     remote.course_id,
@@ -257,6 +297,7 @@ class StateStore:
                     remote.size,
                     remote.updated_at,
                     remote.etag,
+                    remote.content_type,
                     now,
                 ),
             )
@@ -281,11 +322,12 @@ class StateStore:
             self.db.execute(
                 """INSERT INTO catalog_content_items(
                      content_id, course_id, content_type, title, url,
-                     published_at, due_at, available, last_seen_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                     published_at, due_at, updated_at, body_html, available, last_seen_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                    ON CONFLICT(course_id, content_type, content_id) DO UPDATE SET
                      title=excluded.title, url=excluded.url,
                      published_at=excluded.published_at, due_at=excluded.due_at,
+                     updated_at=excluded.updated_at, body_html=excluded.body_html,
                      available=1, last_seen_at=excluded.last_seen_at""",
                 (
                     item.remote_id,
@@ -295,10 +337,103 @@ class StateStore:
                     item.url,
                     item.published_at,
                     item.due_at,
+                    item.updated_at,
+                    item.body_html,
                     now,
                 ),
             )
         self.record_catalog_refresh(f"{scope}:{course.remote_id}", len(items))
+
+    def replace_catalog_modules(self, course: Course, items: list[ModuleItem]) -> None:
+        now = utc_now()
+        self.db.execute(
+            "UPDATE catalog_module_items SET available=0 WHERE course_id=?",
+            (course.remote_id,),
+        )
+        for item in items:
+            self.db.execute(
+                """INSERT INTO catalog_module_items(
+                     course_id, module_id, module_name, item_id, item_type, title,
+                     position, content_id, html_url, external_url, published, locked,
+                     available, last_seen_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                   ON CONFLICT(course_id, module_id, item_id) DO UPDATE SET
+                     module_name=excluded.module_name, item_type=excluded.item_type,
+                     title=excluded.title, position=excluded.position,
+                     content_id=excluded.content_id, html_url=excluded.html_url,
+                     external_url=excluded.external_url, published=excluded.published,
+                     locked=excluded.locked, available=1,
+                     last_seen_at=excluded.last_seen_at""",
+                (
+                    item.course_id,
+                    item.module_id,
+                    item.module_name,
+                    item.remote_id,
+                    item.item_type,
+                    item.title,
+                    item.position,
+                    item.content_id,
+                    item.html_url,
+                    item.external_url,
+                    int(item.published),
+                    int(item.locked),
+                    now,
+                ),
+            )
+        self.record_catalog_refresh(f"modules:{course.remote_id}", len(items))
+
+    def get_artifact(self, artifact_type: str, course_id: str, source_id: str) -> sqlite3.Row | None:
+        return self.db.execute(
+            """SELECT * FROM pull_artifacts
+               WHERE artifact_type=? AND course_id=? AND source_id=?""",
+            (artifact_type, course_id, source_id),
+        ).fetchone()
+
+    def record_artifact(
+        self,
+        *,
+        artifact_type: str,
+        course_id: str,
+        source_id: str,
+        local_path: Path,
+        source_revision: str,
+        sha256: str | None,
+        size_bytes: int | None,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        self.db.execute(
+            """INSERT INTO pull_artifacts(
+                 artifact_type, course_id, source_id, local_path, source_revision,
+                 sha256, size_bytes, status, error, last_seen_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(artifact_type, course_id, source_id) DO UPDATE SET
+                 local_path=excluded.local_path,
+                 source_revision=excluded.source_revision,
+                 sha256=excluded.sha256,
+                 size_bytes=excluded.size_bytes,
+                 status=excluded.status,
+                 error=excluded.error,
+                 last_seen_at=excluded.last_seen_at""",
+            (
+                artifact_type,
+                course_id,
+                source_id,
+                str(local_path),
+                source_revision,
+                sha256,
+                size_bytes,
+                status,
+                error,
+                utc_now(),
+            ),
+        )
+
+    def list_artifact_paths(self) -> list[Path]:
+        rows = self.db.execute(
+            "SELECT local_path FROM pull_artifacts UNION SELECT local_path FROM files"
+        ).fetchall()
+        return [Path(str(row[0])) for row in rows if row[0]]
 
     def get_file(self, course_id: str, remote_id: str) -> StoredFile | None:
         row = self.db.execute(
