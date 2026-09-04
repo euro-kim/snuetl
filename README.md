@@ -221,14 +221,14 @@ the updater deliberately does not modify your working tree.
 
 ## Pull course content
 
-Bare `snuetl pull` pulls every supported kind. Select one kind when needed:
+Bare `snuetl pull` pulls all non-video content. Select one kind when needed:
 
 ```bash
 snuetl pull files
 snuetl pull articles --course 306087
 snuetl pull syllabus --semester 2026-2
 snuetl pull videos --course 306087 --dry-run
-snuetl pull videos --course 306087 --yes
+snuetl pull videos --course 306087 --video-id VIDEO_ID
 ```
 
 Content is stored under
@@ -239,14 +239,22 @@ generated files are preserved; a changed remote copy is written beside them unle
 a rendered PDF when possible, matching uploaded PDFs, and a source manifest.
 
 Video pulling uses authenticated browser discovery and yt-dlp, defaults to 1080p and
-downloads available captions. It does not bypass DRM. Bulk video downloads require
-confirmation; non-interactive callers must pass `--yes`. Use `--best` to remove the
-height cap, and always inspect `--dry-run` first because provider-reported sizes are
-often unavailable.
+downloads available captions. It does not bypass DRM. `pull all` deliberately excludes
+videos. `pull videos` presents an arrow-key/spacebar checklist (including an All checkbox);
+non-interactive callers such as Hermes can pass one or more `--video-id` values, or `--yes`
+to select all. Use `--best` to remove the height cap, and inspect `--dry-run` first because
+provider-reported sizes are often unavailable.
+
+Interactive video pulls first open the eTL account/profile menu. Use the arrow keys to
+choose an identity (such as undergraduate or graduate school), or pass `--profile PROFILE`
+for a known label. The selected identity remains active in the trusted browser session.
 
 `snuetl directory` prints the root. `snuetl directory PATH` changes it for future
 pulls without moving existing data. Add `--move --dry-run` to inspect a checksum-safe
 migration and then `--move --yes` to perform it.
+
+Use `snuetl profile` to list and interactively switch eTL identities, or
+`snuetl profile "Graduate"` to select one directly.
 
 ## Agent and script interface
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,57 @@ class MigrationSummary:
     moved: int = 0
     missing: int = 0
     failed: int = 0
+
+
+_LEGACY_COURSE = re.compile(r"^(?P<semester>\d{4}-\d+)\s+(?P<title>.+?)(?P<sep>--|-)(?P<id>\d+)$")
+
+
+def repair_legacy_layout(root: Path, *, dry_run: bool = False) -> MigrationSummary:
+    """Move pre-0.7 top-level course folders into semester/course/files.
+
+    This intentionally only considers directories with a semester prefix and a
+    numeric course ID, leaving unrelated user files untouched.
+    """
+    root = validate_managed_root(root)
+    summary = MigrationSummary()
+    if not root.is_dir():
+        return summary
+    candidates = list(root.iterdir())
+    # A previous release occasionally created ROOT/<semester>/<semester course>.
+    for semester_dir in list(root.iterdir()):
+        if semester_dir.is_dir() and re.fullmatch(r"\d{4}-\d+", semester_dir.name):
+            candidates.extend(semester_dir.iterdir())
+    for source_dir in candidates:
+        if not source_dir.is_dir():
+            continue
+        match = _LEGACY_COURSE.match(source_dir.name)
+        if not match:
+            continue
+        title = match.group("title").rstrip(" -")
+        destination = root / match.group("semester") / f"{title}--{match.group('id')}" / "files"
+        if source_dir.parent.name == match.group("semester"):
+            # Already under its semester; this handles the malformed nested form.
+            destination = root / match.group("semester") / f"{title}--{match.group('id')}" / "files"
+        children = list(source_dir.iterdir())
+        summary.planned += len(children)
+        if dry_run:
+            continue
+        try:
+            for child in children:
+                target = destination / child.name
+                destination.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    if child.is_file() and target.is_file() and _digest(child) == _digest(target):
+                        child.unlink()
+                        summary.moved += 1
+                        continue
+                    raise OSError(f"destination already exists: {target}")
+                shutil.move(str(child), str(target))
+                summary.moved += 1
+            source_dir.rmdir()
+        except OSError:
+            summary.failed += 1
+    return summary
 
 
 def validate_managed_root(path: Path) -> Path:

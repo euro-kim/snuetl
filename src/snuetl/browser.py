@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from .config import Config, ensure_private_directory
 from .credentials import load_credentials
 from .errors import AuthenticationRequired
+from .profile import profile_lock
 
 LOGGER = logging.getLogger(__name__)
 
@@ -565,6 +566,126 @@ def ensure_authenticated_page(config: Config, context: Any, page: Any) -> None:
         credentials.password,
         trust_browser=credentials.trust_browser,
     )
+
+
+def profile_options(page: Any) -> list[tuple[str, Any]]:
+    """Open the eTL account/profile menu and return selectable identities.
+
+    eTL has shipped several Canvas themes, so selectors intentionally cover the
+    accessible account-menu contract as well as the older Korean markup.
+    """
+    triggers = (
+        page.locator("#global_nav_profile_link, #global_nav_account_link, [data-testid='account-nav']"),
+        page.locator("[aria-label*='Account'], [aria-label*='계정'], [data-testid*='account']"),
+        page.get_by_text(re.compile(r"프로필|profile|계정", re.IGNORECASE)),
+    )
+    trigger = None
+    for candidate in triggers:
+        trigger = _first_visible(candidate)
+        if trigger is not None:
+            break
+    if trigger is not None:
+        try:
+            trigger.click()
+        except Exception:
+            pass
+    options = page.locator(
+        "[role='menuitem'], [role='option'], .profile-menu a, .account-menu a, "
+        "#global_nav_profile a, #global_nav_profile button, #account-switcher a, "
+        "#account-switcher button, a[href*='/profile'], a[href*='/users/']"
+    )
+
+    def visible_options() -> list[tuple[str, Any]]:
+        found: list[tuple[str, Any]] = []
+        seen: set[str] = set()
+        try:
+            for index in range(options.count()):
+                item = options.nth(index)
+                if not item.is_visible():
+                    continue
+                label = " ".join((item.inner_text() or "").split())
+                if not label or label.casefold() in seen:
+                    continue
+                seen.add(label.casefold())
+                found.append((label, item))
+        except Exception:
+            return []
+        return found
+
+    result = visible_options()
+    account_switch = re.compile(r"계정\s*전환|switch\s+account|change\s+account", re.IGNORECASE)
+    switcher = next((item for label, item in result if account_switch.search(label)), None)
+    if switcher is None:
+        # Some eTL builds render the switch action as a plain text link without
+        # a role or stable class.
+        try:
+            candidate = page.get_by_text(account_switch).first
+            if candidate.is_visible():
+                switcher = candidate
+        except Exception:
+            switcher = None
+    if switcher is not None:
+        # The top-level menu contains notifications/settings/account-switch;
+        # only the second menu contains identities.
+        try:
+            switcher.click()
+            page.wait_for_timeout(300)
+        except Exception:
+            return []
+        # The identity chooser is loaded as a same-origin LTI iframe.
+        for frame in page.frames:
+            if frame is page.main_frame or "sso-user-identity" not in frame.url:
+                continue
+            frame_options = frame.locator("a, button, [role='option'], [role='menuitem']")
+            try:
+                frame_result = []
+                for index in range(frame_options.count()):
+                    item = frame_options.nth(index)
+                    if item.is_visible():
+                        label = " ".join((item.inner_text() or "").split())
+                        if label and label.casefold() not in {x.casefold() for x, _ in frame_result}:
+                            frame_result.append((label, item))
+                if frame_result:
+                    return frame_result
+            except Exception:
+                pass
+        result = [
+            (label, item)
+            for label, item in visible_options()
+            if not account_switch.search(label)
+            and label.casefold() not in {"알림", "설정", "notifications", "settings"}
+        ]
+        if not result:
+            # Account-switch dialogs in older deployments use plain buttons.
+            fallback = page.locator("[role='dialog'] a, [role='dialog'] button, #account-switcher a, #account-switcher button")
+            try:
+                result = [(" ".join((item.inner_text() or "").split()), item)
+                          for index in range(fallback.count())
+                          for item in (fallback.nth(index),)
+                          if item.is_visible() and (item.inner_text() or "").strip()]
+            except Exception:
+                result = []
+    return result
+
+
+def switch_profile(config: Config, profile: str | None = None, *, headless: bool = False) -> list[str]:
+    """Select an eTL identity from the account menu and return available labels."""
+    with profile_lock(config.lock_path):
+        with open_authenticated_browser(config, headless=headless) as (context, page):
+            page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
+            ensure_authenticated_page(config, context, page)
+            options = profile_options(page)
+            labels = [label for label, _ in options]
+            if profile is None:
+                return labels
+            wanted = profile.casefold()
+            match = next((item for label, item in options if label.casefold() == wanted or wanted in label.casefold()), None)
+            if match is None:
+                raise ValueError(f"profile not found: {profile}")
+            match.click()
+            page.wait_for_timeout(1000)
+            persist_auth_state(context, config, page.url)
+            return labels
 
 
 def open_authenticated_browser(config: Config, *, headless: bool) -> Any:

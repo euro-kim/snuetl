@@ -5,6 +5,8 @@ import logging
 import platform
 import shutil
 import sys
+import termios
+import tty
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -13,12 +15,14 @@ from rich.table import Table
 
 from . import __version__
 from .agent import emit, emit_error, envelope
+from .browser import switch_profile
 from .catalog import inspect_catalog, refresh_catalog
 from .config import Config, ConfigError, default_config_path, load_config, save_config
 from .credentials import load_credentials
 from .directory_manager import (
     execute_directory_migration,
     plan_directory_migration,
+    repair_legacy_layout,
     validate_managed_root,
 )
 from .errors import AuthenticationRequired, SnuetlError
@@ -164,12 +168,22 @@ def _parser() -> argparse.ArgumentParser:
     pull.add_argument("--directory", type=Path, help="override the managed root for this pull")
     pull.add_argument("--dry-run", action="store_true", help="discover and estimate without writing")
     pull.add_argument("--yes", action="store_true", help="accept bulk video download consent")
+    pull.add_argument(
+        "--video-id", "--video", dest="video_ids", action="append", default=[],
+        help="select a video by ID (repeatable; for Hermes and unattended use)",
+    )
+    pull.add_argument("--profile", help="eTL identity/profile label to use")
     pull.add_argument("--force", action="store_true", help="overwrite locally edited generated content")
     pull.add_argument("--best", action="store_true", help="download the best available video quality")
     pull.add_argument("--max-height", type=int, default=1080, help="maximum video height")
     pull.add_argument("--no-captions", action="store_true", help="do not download video captions")
     pull.add_argument("--jobs", type=int, default=1, help="video download concurrency (default: 1)")
     add_agent_flags(pull)
+
+    profile = subparsers.add_parser("profile", help="list or switch the active eTL identity")
+    profile.add_argument("name", nargs="?", help="profile label (substring match is allowed)")
+    add_display_mode(profile)
+    add_agent_flags(profile)
 
     directory = subparsers.add_parser("directory", help="show or configure the managed pull root")
     directory.add_argument("path", nargs="?", type=Path)
@@ -416,9 +430,9 @@ def _capabilities() -> dict[str, object]:
             "inspect": ["courses", "files", "articles", "assignments"],
             "sql": {"interactive": "snuetl sql", "noninteractive": ["--execute", "--file", "stdin"]},
             "pull": ["files", "articles", "syllabus", "videos", "all"],
-            "maintenance": ["refresh", "directory", "status", "doctor", "version", "update", "uninstall"],
+            "maintenance": ["refresh", "directory", "profile", "status", "doctor", "version", "update", "uninstall"],
         },
-        "agent_flags": ["--json", "--no-input", "--yes", "--dry-run"],
+        "agent_flags": ["--json", "--no-input", "--yes", "--dry-run", "--video-id"],
         "exit_codes": {"0": "success", "1": "command failure", "2": "authentication required", "3": "configuration or local-state error", "4": "partial result", "5": "input required"},
     }
 
@@ -462,15 +476,114 @@ def _read_sql(args: argparse.Namespace) -> str | None:
     return None
 
 
-def _confirm_pull(plan: object, args: argparse.Namespace) -> bool:
-    count = len(plan.video_items) + len(plan.uploaded_media)
-    if "videos" not in plan.kinds or not count or args.dry_run or args.yes:
+def _video_choices(plan: object) -> list[tuple[str, str]]:
+    choices = [(item.remote_id, f"{course.display_name}: {item.title}") for course, item in plan.modules
+               if (item.item_type.casefold() == "externaltool" or item.external_url) and item.published]
+    choices.extend((remote.remote_id, f"{course.display_name}: {remote.name}") for course, remote in plan.files
+                   if (remote.content_type or "").casefold().startswith(("video/", "audio/")))
+    return choices
+
+
+def _choose_profile(config: Config, args: argparse.Namespace) -> bool:
+    """Offer the same identity switch exposed by the eTL account menu."""
+    if args.profile:
+        switch_profile(config, args.profile, headless=False)
         return True
     if args.no_input or args.json:
-        return False
-    known = sum(remote.size or 0 for _, remote in plan.uploaded_media)
-    size = f"; at least {known / (1024 ** 3):.2f} GiB is known" if known else ""
-    return Confirm.ask(f"Download {count} video item(s){size}?", default=False)
+        return True
+    labels = switch_profile(config, None, headless=False)
+    if len(labels) <= 1:
+        return True
+    selected = 0
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        while True:
+            console.clear()
+            console.print("Choose eTL profile (↑/↓, Enter select, q cancel)")
+            for index, label in enumerate(labels):
+                console.print(f"{'>' if index == selected else ' '} {label}")
+            key = sys.stdin.read(1)
+            if key == "\x1b":
+                sequence = sys.stdin.read(2)
+                if sequence == "[A": selected = max(0, selected - 1)
+                elif sequence == "[B": selected = min(len(labels) - 1, selected + 1)
+            elif key in {"\r", "\n"}:
+                switch_profile(config, labels[selected], headless=False)
+                return True
+            elif key.casefold() == "q":
+                return False
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _run_profile(config: Config, args: argparse.Namespace) -> int:
+    labels = switch_profile(config, None, headless=_headless_choice(args))
+    if args.name:
+        switch_profile(config, args.name, headless=_headless_choice(args))
+        labels = [args.name]
+    elif len(labels) > 1:
+        # Reuse the terminal selector used by video pulls.
+        args.profile = None
+        if not _choose_profile(config, args):
+            return 0
+    if args.json:
+        emit(envelope("profile", data={"profiles": labels, "selected": args.name}))
+    else:
+        console.print("Available eTL profiles:")
+        for label in labels:
+            console.print(f"  {label}")
+    return 0
+
+
+def _select_videos(plan: object, args: argparse.Namespace) -> tuple[bool, tuple[str, ...] | None]:
+    choices = _video_choices(plan)
+    if "videos" not in plan.kinds or not choices:
+        return True, None
+    if args.video_ids:
+        wanted = set(args.video_ids)
+        unknown = wanted - {video_id for video_id, _ in choices}
+        if unknown:
+            raise ValueError(f"unknown video ID(s): {', '.join(sorted(unknown))}")
+        return True, tuple(video_id for video_id, _ in choices if video_id in wanted)
+    if args.yes:
+        return True, tuple(video_id for video_id, _ in choices)
+    if args.dry_run:
+        return True, None
+    if args.no_input or args.json:
+        return False, None
+    # Simple terminal selector: arrows move, space toggles, Enter accepts.
+    selected = [False] * len(choices)
+    cursor = 0  # 0 is the All row; video rows are 1..N
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        while True:
+            console.clear()
+            console.print("Select videos (↑/↓ move, Space toggle, Enter download, q cancel)")
+            all_selected = all(selected)
+            console.print(f"{'>' if cursor == 0 else ' '} {'[x]' if all_selected else '[ ]'} All")
+            for index, (_, label) in enumerate(choices):
+                marker = ">" if index + 1 == cursor else " "
+                console.print(f"{marker} {'[x]' if selected[index] else '[ ]'} {label}")
+            key = sys.stdin.read(1)
+            if key == "\x1b":
+                sequence = sys.stdin.read(2)
+                if sequence == "[A": cursor = max(0, cursor - 1)
+                elif sequence == "[B": cursor = min(len(choices), cursor + 1)
+            elif key == " ":
+                if cursor == 0:
+                    selected = [not all_selected] * len(choices)
+                else:
+                    selected[cursor - 1] = not selected[cursor - 1]
+            elif key in {"\r", "\n"}:
+                return True, tuple(video_id for (video_id, _), yes in zip(choices, selected) if yes)
+            elif key.casefold() == "q":
+                return False, None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def _run_uninstall(config: Config, args: argparse.Namespace) -> int:
@@ -633,6 +746,8 @@ def main(argv: list[str] | None = None) -> int:
                 emit(envelope("status", data=_status_data(config)))
                 return 0
             return _status(config)
+        if args.command == "profile":
+            return _run_profile(config, args)
         if args.command == "doctor":
             if args.json:
                 data = _doctor_data(config, args.config)
@@ -690,21 +805,32 @@ def main(argv: list[str] | None = None) -> int:
                 print_query_result(result, args.format)
             return 0
         if args.command == "pull":
-            kinds = ("files", "articles", "syllabus", "videos") if args.kind == "all" else (args.kind,)
+            # Videos are intentionally opt-in; `pull all` handles course files,
+            # articles, and syllabi only.
+            kinds = ("files", "articles", "syllabus") if args.kind == "all" else (args.kind,)
             if args.max_height <= 0 or args.jobs <= 0:
                 raise ValueError("--max-height and --jobs must be positive")
+            # Normalize folders produced by older releases before this pull so
+            # files, articles, syllabi, and videos share one course directory.
+            repair_legacy_layout(validate_managed_root(args.directory or config.download_dir))
+            if args.kind == "videos" and not _choose_profile(config, args):
+                return 0
             plan = discover_pull_plan(
                 config,
                 kinds,
                 course_selectors=tuple(args.course),
                 semesters=tuple(args.semester),
             )
-            if not _confirm_pull(plan, args):
+            selected_ok, selected_ids = _select_videos(plan, args)
+            if not selected_ok:
                 if args.json:
-                    emit_error("pull", "INPUT_REQUIRED", "Video downloads require confirmation.", "Review with --dry-run, then pass --yes.")
+                    choices = _video_choices(plan)
+                    emit_error("pull", "INPUT_REQUIRED", "Video selection is required.", "Pass --video-id for each selected video or --yes for all; available IDs: " + ", ".join(video_id for video_id, _ in choices))
                 else:
-                    LOGGER.error("video downloads require confirmation; pass --yes")
+                    LOGGER.error("video selection required; use the interactive selector or pass --video-id/--yes")
                 return 5
+            if selected_ids is not None:
+                plan = replace(plan, selected_video_ids=selected_ids)
             root = validate_managed_root(args.directory or config.download_dir)
             summary = execute_pull(
                 config,
@@ -737,6 +863,12 @@ def main(argv: list[str] | None = None) -> int:
                 if not Confirm.ask(f"Move {len(entries)} tracked artifact(s) to {root}?", default=False):
                     return 0
             summary = execute_directory_migration(config, entries, dry_run=args.dry_run)
+            legacy = repair_legacy_layout(root, dry_run=args.dry_run) if args.move else None
+            if legacy is not None:
+                summary.planned += legacy.planned
+                summary.moved += legacy.moved
+                summary.missing += legacy.missing
+                summary.failed += legacy.failed
             if not args.dry_run:
                 save_config(replace(config, download_dir=root), args.config)
             data = {

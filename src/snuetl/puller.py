@@ -40,22 +40,31 @@ class PullPlan:
     files: tuple[tuple[Course, RemoteFile], ...] = ()
     articles: tuple[tuple[Course, ContentItem], ...] = ()
     modules: tuple[tuple[Course, ModuleItem], ...] = ()
+    selected_video_ids: tuple[str, ...] | None = None
 
     @property
     def video_items(self) -> tuple[tuple[Course, ModuleItem], ...]:
-        return tuple(
+        items = tuple(
             pair
             for pair in self.modules
-            if pair[1].item_type.casefold() == "externaltool" and pair[1].published
+            if (pair[1].item_type.casefold() == "externaltool" or pair[1].external_url) and pair[1].published
         )
+        if self.selected_video_ids is None:
+            return items
+        selected = set(self.selected_video_ids)
+        return tuple(pair for pair in items if pair[1].remote_id in selected)
 
     @property
     def uploaded_media(self) -> tuple[tuple[Course, RemoteFile], ...]:
-        return tuple(
+        items = tuple(
             pair
             for pair in self.files
             if (pair[1].content_type or "").casefold().startswith(("video/", "audio/"))
         )
+        if self.selected_video_ids is None:
+            return items
+        selected = set(self.selected_video_ids)
+        return tuple(pair for pair in items if pair[1].remote_id in selected)
 
     @property
     def syllabus_files(self) -> tuple[tuple[Course, RemoteFile], ...]:
@@ -126,6 +135,18 @@ def discover_pull_plan(
 
 def plan_data(plan: PullPlan) -> dict[str, object]:
     known_video_bytes = sum(remote.size or 0 for _, remote in plan.uploaded_media)
+    videos = [
+        {"video_id": item.remote_id, "course_id": course.remote_id,
+         "course_name": course.display_name, "title": item.title}
+        for course, item in plan.modules
+        if (item.item_type.casefold() == "externaltool" or item.external_url) and item.published
+    ]
+    videos.extend(
+        {"video_id": remote.remote_id, "course_id": course.remote_id,
+         "course_name": course.display_name, "title": remote.name}
+        for course, remote in plan.files
+        if (remote.content_type or "").casefold().startswith(("video/", "audio/"))
+    )
     return {
         "kinds": list(plan.kinds),
         "courses": len(plan.courses),
@@ -135,6 +156,8 @@ def plan_data(plan: PullPlan) -> dict[str, object]:
         "video_items": len(plan.video_items) + len(plan.uploaded_media),
         "known_video_bytes": known_video_bytes,
         "video_size_complete": not plan.video_items,
+        "selected_video_ids": list(plan.selected_video_ids) if plan.selected_video_ids is not None else None,
+        "videos": videos,
     }
 
 
@@ -596,6 +619,8 @@ def _pull_videos(
     jobs: int,
 ) -> None:
     if "videos" not in plan.kinds:
+        return
+    if not plan.video_items and not plan.uploaded_media:
         return
     if dry_run:
         summary.skipped += len(plan.video_items) + len(plan.uploaded_media)
