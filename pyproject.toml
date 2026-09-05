@@ -57,6 +57,7 @@ files = [
   "src/snuetl/canvas_adapter.py",
   "src/snuetl/cli_parser.py",
   "src/snuetl/cli_runtime.py",
+  "src/snuetl/container_runtime.py",
   "src/snuetl/discovery.py",
   "src/snuetl/discord_access.py",
   "src/snuetl/discord_config.py",
@@ -71,6 +72,7 @@ files = [
   "src/snuetl/logging_utils.py",
   "src/snuetl/media.py",
   "src/snuetl/routing.py",
+  "src/snuetl/runtime.py",
 ]
 check_untyped_defs = true
 no_implicit_optional = true

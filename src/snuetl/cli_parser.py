@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, help_text in (
         ("status", "show local enrollment and last-sync state"),
-        ("doctor", "check dependencies and configuration"),
+        ("doctor", "check dependencies, configuration, and runtime"),
     ):
         add_agent_flags(subparsers.add_parser(name, help=help_text))
 

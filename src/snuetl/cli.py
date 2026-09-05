@@ -50,6 +50,7 @@ from .profile import profile_lock
 from .puller import PullSummary, discover_pull_plan, execute_pull, plan_data
 from .query import execute_query
 from .routing import parse_remote_folder
+from .runtime import container_supervisor_is_active, is_container_runtime
 from .scheduler import (
     discord_service_is_active,
     discord_service_is_enabled,
@@ -206,6 +207,7 @@ def _status_data(config: Config) -> dict[str, object]:
         "discord": {
             "enabled": config.discord.enabled,
             "configured": config.discord.configured,
+            "service_manager": "docker_compose" if is_container_runtime() else "systemd",
             "service_enabled": discord_service_is_enabled()
             if platform.system() == "Linux"
             else False,
@@ -391,14 +393,23 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
         },
     ]
     if platform.system() == "Linux":
-        checks.append(
-            {
-                "name": "systemd_timer",
-                "ok": timer_is_enabled(),
-                "detail": "15-minute timer",
-                "optional": True,
-            }
-        )
+        if is_container_runtime():
+            checks.append(
+                {
+                    "name": "container_supervisor",
+                    "ok": container_supervisor_is_active(),
+                    "detail": "Docker Compose; synchronization is Discord-triggered",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "name": "systemd_timer",
+                    "ok": timer_is_enabled(),
+                    "detail": "15-minute timer",
+                    "optional": True,
+                }
+            )
         if config.discord.configured:
             linger = linger_status()
             checks.extend(
@@ -406,11 +417,15 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
                     {
                         "name": "discord_service",
                         "ok": discord_service_is_enabled() and discord_service_is_active(),
-                        "detail": "user systemd service",
+                        "detail": "Docker Compose supervisor"
+                        if is_container_runtime()
+                        else "user systemd service",
                         "optional": True,
                     },
                     {
-                        "name": "user_linger",
+                        "name": "container_restart_policy"
+                        if is_container_runtime()
+                        else "user_linger",
                         "ok": linger.enabled,
                         "detail": linger.detail,
                         "optional": True,

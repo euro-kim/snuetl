@@ -19,6 +19,7 @@ from .directory_manager import (
 )
 from .onboarding import browser_available
 from .puller import discover_pull_plan, execute_pull, plan_data
+from .runtime import is_container_runtime
 from .scheduler import discord_service_is_active, discord_service_is_enabled, linger_status
 from .state import StateStore
 from .syncer import synchronize
@@ -51,6 +52,7 @@ def status_data(config: Config) -> dict[str, object]:
         "discord": {
             "enabled": config.discord.enabled,
             "configured": config.discord.configured,
+            "service_manager": "docker_compose" if is_container_runtime() else "systemd",
             "service_enabled": discord_service_is_enabled()
             if platform.system() == "Linux"
             else False,
@@ -135,11 +137,15 @@ def doctor_data(config: Config, config_path: Path | None = None) -> dict[str, ob
                 {
                     "name": "discord_service",
                     "ok": discord_service_is_enabled() and discord_service_is_active(),
-                    "detail": "user systemd service",
+                    "detail": "Docker Compose supervisor"
+                    if is_container_runtime()
+                    else "user systemd service",
                     "optional": True,
                 },
                 {
-                    "name": "user_linger",
+                    "name": "container_restart_policy"
+                    if is_container_runtime()
+                    else "user_linger",
                     "ok": linger.enabled,
                     "detail": linger.detail,
                     "optional": True,

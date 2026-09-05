@@ -1,0 +1,45 @@
+services:
+  snuetl:
+    container_name: ${SNUETL_CONTAINER_NAME:-snuetl}
+    image: snuetl:local
+    build:
+      context: .
+      args:
+        SNUETL_UID: ${SNUETL_UID:-1000}
+        SNUETL_GID: ${SNUETL_GID:-1000}
+    init: true
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    ipc: host
+    read_only: true
+    stop_grace_period: 20s
+    environment:
+      SNUETL_RUNTIME: container
+      SNUETL_RUNTIME_DIR: /run/snuetl
+      TZ: ${SNUETL_TIMEZONE:-Asia/Seoul}
+    volumes:
+      - type: bind
+        source: ${SNUETL_CONFIG_DIR:-./docker-data/config}
+        target: /home/snuetl/.config/snuetl
+      - type: bind
+        source: ${SNUETL_STATE_DIR:-./docker-data/state}
+        target: /home/snuetl/.local/state/snuetl
+      - type: bind
+        source: ${SNUETL_DOWNLOAD_DIR:-./docker-data/downloads}
+        target: /data/downloads
+      - type: bind
+        source: ${SNUETL_VIDEO_DIR:-./docker-data/videos}
+        target: /data/videos
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /run:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deployment/docker/seccomp_profile.json
+    healthcheck:
+      test: ["CMD", "python", "-m", "snuetl.container_runtime", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

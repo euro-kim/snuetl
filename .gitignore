@@ -7,9 +7,12 @@ dist/
 build/
 *.egg-info/
 *.part
+.env
+.env.*
+!.env.example
+docker-data/
 
 # Authentication profiles and local state are credentials/data, not source.
 .snuetl/
 auth-profile/
 state.db*
-

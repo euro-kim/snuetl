@@ -7,12 +7,21 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .runtime import (
+    container_discord_is_active,
+    container_supervisor_is_active,
+    is_container_runtime,
+    request_container_reload,
+)
+
 
 def _systemd_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def install_user_timer(config_path: Path, *, interval_minutes: int = 15) -> Path:
+    if is_container_runtime():
+        raise RuntimeError("scheduled synchronization is not enabled in the Docker deployment")
     if shutil.which("systemctl") is None:
         raise RuntimeError("systemctl is not available on this machine")
     unit_dir = Path.home() / ".config" / "systemd" / "user"
@@ -69,6 +78,8 @@ WantedBy=timers.target
 
 
 def timer_is_enabled() -> bool:
+    if is_container_runtime():
+        return False
     if shutil.which("systemctl") is None:
         return False
     result = subprocess.run(
@@ -99,7 +110,10 @@ def install_discord_service(
     state_dir: Path | None = None,
     download_dir: Path | None = None,
     write_dirs: tuple[Path, ...] = (),
-) -> Path:
+) -> Path | None:
+    if is_container_runtime():
+        request_container_reload()
+        return None
     if shutil.which("systemctl") is None:
         raise RuntimeError("systemctl is not available on this machine")
     path = discord_service_path()
@@ -156,6 +170,8 @@ WantedBy=default.target
 
 
 def discord_service_is_enabled() -> bool:
+    if is_container_runtime():
+        return container_supervisor_is_active()
     if shutil.which("systemctl") is None:
         return False
     result = subprocess.run(
@@ -168,6 +184,8 @@ def discord_service_is_enabled() -> bool:
 
 
 def discord_service_is_active() -> bool:
+    if is_container_runtime():
+        return container_discord_is_active()
     if shutil.which("systemctl") is None:
         return False
     result = subprocess.run(
@@ -180,6 +198,9 @@ def discord_service_is_active() -> bool:
 
 
 def set_discord_service_enabled(enabled: bool) -> None:
+    if is_container_runtime():
+        request_container_reload()
+        return
     if shutil.which("systemctl") is None:
         raise RuntimeError("systemctl is not available on this machine")
     action = "enable" if enabled else "disable"
@@ -187,12 +208,18 @@ def set_discord_service_enabled(enabled: bool) -> None:
 
 
 def restart_discord_service() -> None:
+    if is_container_runtime():
+        request_container_reload()
+        return
     if shutil.which("systemctl") is None:
         raise RuntimeError("systemctl is not available on this machine")
     subprocess.run(["systemctl", "--user", "restart", DISCORD_SERVICE_NAME], check=True)
 
 
 def remove_discord_service() -> bool:
+    if is_container_runtime():
+        request_container_reload()
+        return False
     path = discord_service_path()
     systemctl = shutil.which("systemctl")
     if systemctl:
@@ -211,6 +238,8 @@ def remove_discord_service() -> bool:
 
 
 def linger_status(username: str | None = None) -> LingerStatus:
+    if is_container_runtime():
+        return LingerStatus(True, "managed by Docker Compose restart policy")
     loginctl = shutil.which("loginctl")
     user = username or os.environ.get("USER") or ""
     if loginctl is None or not user:

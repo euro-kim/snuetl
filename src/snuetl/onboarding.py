@@ -27,6 +27,7 @@ from .directory_manager import (
 from .errors import AuthenticationRequired
 from .profile import profile_lock
 from .provenance import record_apt_package, record_playwright_browser
+from .runtime import container_supervisor_is_active, is_container_runtime
 from .scheduler import discord_service_is_enabled, install_discord_service, timer_is_enabled
 from .ui import (
     choose_checkbox,
@@ -451,14 +452,26 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
         )
     )
     if platform.system() == "Linux":
-        enabled = timer_is_enabled()
-        checks.append(
-            (
-                "15-minute timer (optional)",
-                enabled,
-                "enabled" if enabled else "not enabled",
+        if is_container_runtime():
+            active = container_supervisor_is_active()
+            checks.append(
+                (
+                    "Docker Compose supervisor",
+                    active,
+                    "active; synchronization is Discord-triggered"
+                    if active
+                    else "not active",
+                )
             )
-        )
+        else:
+            enabled = timer_is_enabled()
+            checks.append(
+                (
+                    "15-minute timer (optional)",
+                    enabled,
+                    "enabled" if enabled else "not enabled",
+                )
+            )
 
     table = Table(title="snuetl doctor")
     table.add_column("Check")

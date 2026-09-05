@@ -17,6 +17,7 @@ from rich.table import Table
 from .config import Config, DiscordSettings, default_config_path, save_config
 from .credentials import load_credentials
 from .discord_config import load_discord_token, save_discord_token
+from .runtime import is_container_runtime
 from .scheduler import (
     discord_service_is_active,
     discord_service_is_enabled,
@@ -244,6 +245,7 @@ def discord_status(config: Config) -> dict[str, object]:
         "token_present": load_discord_token(config) is not None,
         "service_enabled": discord_service_is_enabled(),
         "service_active": discord_service_is_active(),
+        "service_manager": "docker_compose" if is_container_runtime() else "systemd",
         "permissions_integer": DISCORD_PERMISSIONS,
         "required_permissions": [item[0] for item in REQUIRED_DISCORD_PERMISSIONS],
         "invite_url": invite_url(config.discord.application_id)
@@ -480,7 +482,7 @@ def configure_discord(
     )
     return configured, {
         **discord_status(configured),
-        "service_path": str(service_path),
+        "service_path": str(service_path) if service_path else "Docker Compose supervisor",
         "invite_url": invite_url(app_id),
     }
 

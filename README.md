@@ -25,6 +25,7 @@ stored, and unattended commands fail closed when renewed verification is require
 - Files, articles, pages, assignments, quizzes, syllabi, and authenticated video support.
 - Headless x86-64 and ARM64 operation, including 64-bit Raspberry Pi OS.
 - Optional hardened systemd user timer for unattended synchronization.
+- Docker Compose deployment with persistent storage and an always-accessible shell.
 - Optional private Discord control with owner, server, and channel allowlists.
 - Stable `--json --no-input` contract and documented exit codes for automation.
 
@@ -32,6 +33,8 @@ stored, and unattended commands fail closed when renewed verification is require
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Docker Compose deployment](#docker-compose-deployment)
+- [Raspberry Pi and Linux ARM64](#raspberry-pi-and-linux-arm64)
 - [Authentication and secrets](#authentication-and-secrets)
 - [Local storage](#local-storage)
 - [Multiple users on one Linux server](#multiple-users-on-one-linux-server)
@@ -53,7 +56,7 @@ stored, and unattended commands fail closed when renewed verification is require
 | Operating system | 64-bit Linux (x86-64 or ARM64) |
 | Python | 3.11 or newer |
 | Browser | Playwright Chromium, Google Chrome, or system Chromium on Raspberry Pi OS |
-| Service manager | systemd user services, only for scheduled or Discord operation |
+| Deployment runtime | Docker Compose v2, or systemd user services for a native install |
 | Account | An authorized SNU eTL account |
 
 Desktop operation is not required. Setup detects display availability and uses headless
@@ -105,7 +108,142 @@ python -m pip install -e '.[test]'
 snuetl
 ```
 
-### Raspberry Pi and Linux ARM64
+## Docker Compose deployment
+
+Docker Compose packages Python, Chromium, browser libraries, and FFmpeg into one image.
+The deployment runs as a non-root user, exposes no network ports, and supports native
+Linux x86-64 and ARM64 Docker hosts. Docker Desktop on macOS and Windows is not currently
+an advertised target because its bind-mount ownership model differs from Linux.
+
+The named container remains running before and after setup. Its supervisor starts the
+Discord daemon automatically when Discord becomes configured, but it never schedules
+polling. Synchronization happens only when an owner invokes `/snuetl sync` in Discord or
+someone runs `snuetl sync` in the container.
+
+### First deployment
+
+Create the local Compose configuration and its private bind directories:
+
+```bash
+cp .env.example .env
+mkdir -p docker-data/{config,state,downloads,videos}
+chmod 700 docker-data/{config,state,downloads,videos}
+```
+
+The repository already ignores `.env` and `docker-data/`. Confirm that `SNUETL_UID` and
+`SNUETL_GID` in `.env` match the Linux account that owns those directories:
+
+```bash
+id -u
+id -g
+```
+
+Start the container, complete headless enrollment in its terminal, and configure Discord:
+
+```bash
+docker compose up --build -d
+docker compose ps
+docker compose exec snuetl snuetl setup --headless
+docker compose exec snuetl snuetl discord
+docker compose exec snuetl snuetl doctor
+```
+
+The setup wizard already defaults to `/data/downloads` and `/data/videos`; keep those
+container paths even when the matching host paths differ. Credentials and verification
+codes are entered through the attached terminal. No browser window or VNC port is exposed.
+After Discord setup completes, the supervisor notices the saved configuration and starts
+the bot without requiring a container restart.
+
+### Persistent path model
+
+Values in `.env` are paths on the Docker host. Values saved in `config.toml` are paths
+inside the container:
+
+| `.env` variable | Container path | Contents |
+| --- | --- | --- |
+| `SNUETL_CONFIG_DIR` | `/home/snuetl/.config/snuetl` | `config.toml` |
+| `SNUETL_STATE_DIR` | `/home/snuetl/.local/state/snuetl` | Browser profile, credentials, Discord token, SQLite catalog |
+| `SNUETL_DOWNLOAD_DIR` | `/data/downloads` | Files, articles, and syllabi |
+| `SNUETL_VIDEO_DIR` | `/data/videos` | Video downloads and captions |
+
+Do not place host paths such as `/srv/snuetl/downloads` in the container's TOML file.
+Instead, set that path as `SNUETL_DOWNLOAD_DIR` in `.env`; it will still appear inside
+the container as `/data/downloads`. The stable internal paths allow the image to be
+rebuilt or moved without rewriting catalog records.
+
+The default repository-local paths are convenient for a first run. For a server, replace
+them with absolute host paths before enrollment. Compose does not expand a literal `~` in
+bind-mount values. After changing `.env`, rebuild for possible UID/GID changes and recreate
+the container while preserving the mounted data:
+
+```bash
+docker compose up --build -d --force-recreate
+```
+
+### Terminal and operations
+
+Open an interactive shell at any time; leaving the shell does not stop the supervisor:
+
+```bash
+docker compose exec snuetl bash
+docker compose exec snuetl snuetl status
+docker compose exec snuetl snuetl sync
+```
+
+Inspect or restart the deployment with:
+
+```bash
+docker compose logs -f snuetl
+docker compose restart snuetl
+docker compose stop snuetl
+docker compose start snuetl
+```
+
+An `unhealthy` container means the supervisor heartbeat stopped. A healthy container can
+still be waiting for initial setup or Discord pairing; use `snuetl doctor` and
+`snuetl discord status` to inspect application readiness.
+
+To deploy a reviewed source update, rebuild the immutable image rather than running
+`snuetl update` inside the container:
+
+```bash
+git pull --ff-only
+docker compose build --pull
+docker compose up -d
+docker compose exec snuetl snuetl doctor
+```
+
+For a consistent backup, stop the container and copy the four host directories from
+`.env`, encrypting the config/state backup because it contains reusable credentials,
+cookies, and the Discord token. `docker compose down` removes the container and network
+but does not delete bind-mounted data. Because the image is immutable, remove a Docker
+deployment with Compose rather than running `snuetl uninstall`; delete bind directories
+separately only after verifying the backup and exact host paths.
+
+### Multiple accounts
+
+Use a separate env file, explicit container name, and four distinct host paths for every
+SNU account. For example:
+
+```bash
+cp .env.example .env.alice
+# Edit SNUETL_CONTAINER_NAME and every SNUETL_*_DIR value in .env.alice.
+docker compose --env-file .env.alice -p snuetl-alice up --build -d
+docker compose --env-file .env.alice -p snuetl-alice exec snuetl \
+  snuetl setup --headless
+```
+
+Never share a config directory, state directory, or writable download root between
+instances. Changing only the Compose project name is insufficient because
+`container_name` and the bind-mount paths are explicit.
+
+The Compose security profile is based on Playwright's
+[official seccomp profile](https://github.com/microsoft/playwright/blob/main/utils/docker/seccomp_profile.json),
+which extends Docker's default policy for Chromium user namespaces. The container also
+uses Docker init handling and host IPC as recommended by
+[Playwright's Docker guidance](https://playwright.dev/python/docs/docker).
+
+## Raspberry Pi and Linux ARM64
 
 `snuetl` supports 64-bit ARM Linux (`aarch64`/`arm64`) with Python 3.11 or newer.
 The setup wizard detects the architecture and validates a real headless browser launch.
@@ -250,7 +388,7 @@ snuetl directory                show or configure pull roots and routing rules
 snuetl directory videos [PATH]  show or set the large-video storage root
 snuetl capabilities --json      describe the stable agent-facing contract
 snuetl status                   show the last sync and tracked counts
-snuetl doctor                   check browser, config, profile, and timer
+snuetl doctor                   check browser, config, profile, and runtime
 snuetl version [--check]        show the installed and published versions
 snuetl update                   update the pipx installation
 snuetl logout                   remove browser authentication and saved credentials
@@ -643,6 +781,9 @@ If it is not exposed by the deployment, it falls back to semantic DOM selectors.
 never uses fixed screen coordinates.
 
 ## Production deployment
+
+This section covers a native pipx/systemd deployment. For a containerized installation,
+use [Docker Compose deployment](#docker-compose-deployment) instead.
 
 Run each deployment as a dedicated, unprivileged Linux user. Keep the checkout, config,
 state, and download roots owned by that user; never run `snuetl` or its browser with
