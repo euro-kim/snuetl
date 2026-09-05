@@ -4,12 +4,13 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config
-from .provenance import InstallProvenance, load_provenance
 from .profile import profile_lock
+from .provenance import InstallProvenance, load_provenance
 from .state import StateStore
 
 
@@ -23,6 +24,11 @@ class UninstallInventory:
     tracked_files: tuple[Path, ...]
     provenance: InstallProvenance
     pipx_install: bool
+    managed_roots: tuple[Path, ...] = ()
+
+    @property
+    def discord_service_path(self) -> Path:
+        return self.service_path.with_name("snuetl-discord.service")
 
 
 @dataclass(slots=True)
@@ -38,7 +44,11 @@ class UninstallSummary:
 
 def _pipx_install() -> bool:
     prefix = Path(sys.prefix).resolve()
-    return prefix.name == "snuetl" and prefix.parent.name == "venvs" and shutil.which("pipx") is not None
+    return (
+        prefix.name == "snuetl"
+        and prefix.parent.name == "venvs"
+        and shutil.which("pipx") is not None
+    )
 
 
 def build_inventory(config: Config, config_path: Path) -> UninstallInventory:
@@ -56,6 +66,14 @@ def build_inventory(config: Config, config_path: Path) -> UninstallInventory:
         tracked_files=tuple(dict.fromkeys(path.resolve() for path in tracked)),
         provenance=load_provenance(config),
         pipx_install=_pipx_install(),
+        managed_roots=tuple(
+            dict.fromkeys(
+                [
+                    config.download_dir.resolve(),
+                    *(route.destination.resolve() for route in config.directory_routes),
+                ]
+            )
+        ),
     )
 
 
@@ -70,7 +88,9 @@ def inventory_data(value: UninstallInventory) -> dict[str, object]:
         "tracked_files": len(existing),
         "tracked_bytes": sum(path.stat().st_size for path in existing),
         "systemd_units": [
-            str(path) for path in (value.service_path, value.timer_path) if path.exists()
+            str(path)
+            for path in (value.service_path, value.timer_path, value.discord_service_path)
+            if path.exists()
         ],
         "playwright_browser_installed_by_snuetl": value.provenance.playwright_browser,
         "apt_packages_installed_by_snuetl": value.provenance.apt_packages,
@@ -81,14 +101,21 @@ def inventory_data(value: UninstallInventory) -> dict[str, object]:
 def _remove_timer(inventory: UninstallInventory, summary: UninstallSummary) -> None:
     systemctl = shutil.which("systemctl")
     if systemctl:
-        subprocess.run(
-            [systemctl, "--user", "disable", "--now", "snuetl.timer"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        units: list[str] = []
+        if inventory.timer_path.exists() or inventory.service_path.exists():
+            units.append("snuetl.timer")
+        if inventory.discord_service_path.exists():
+            units.append("snuetl-discord.service")
+        for unit in units:
+            subprocess.run(
+                [systemctl, "--user", "disable", "--now", unit],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
     inventory.timer_path.unlink(missing_ok=True)
     inventory.service_path.unlink(missing_ok=True)
+    inventory.discord_service_path.unlink(missing_ok=True)
     if systemctl:
         subprocess.run([systemctl, "--user", "daemon-reload"], check=False)
         subprocess.run([systemctl, "--user", "reset-failed"], check=False)
@@ -101,11 +128,18 @@ def _safe_managed_path(path: Path, root: Path) -> bool:
     return managed not in {Path("/"), Path.home().resolve()} and managed in resolved.parents
 
 
+def _managed_roots(inventory: UninstallInventory) -> tuple[Path, ...]:
+    return inventory.managed_roots or (inventory.download_dir,)
+
+
 def _remove_tracked_files(inventory: UninstallInventory, summary: UninstallSummary) -> None:
     for path in inventory.tracked_files:
-        if not _safe_managed_path(path, inventory.download_dir):
+        if not any(_safe_managed_path(path, root) for root in _managed_roots(inventory)):
             summary.warnings.append(
-                {"code": "UNSAFE_FILE_PATH", "message": f"Retained path outside managed root: {path}"}
+                {
+                    "code": "UNSAFE_FILE_PATH",
+                    "message": f"Retained path outside managed root: {path}",
+                }
             )
             continue
         try:
@@ -113,16 +147,18 @@ def _remove_tracked_files(inventory: UninstallInventory, summary: UninstallSumma
                 path.unlink()
                 summary.files_removed += 1
         except OSError as exc:
-            summary.warnings.append(
-                {"code": "FILE_REMOVE_FAILED", "message": f"{path}: {exc}"}
-            )
+            summary.warnings.append({"code": "FILE_REMOVE_FAILED", "message": f"{path}: {exc}"})
     for directory in sorted(
         {path.parent for path in inventory.tracked_files},
         key=lambda item: len(item.parts),
         reverse=True,
     ):
         current = directory
-        while _safe_managed_path(current, inventory.download_dir):
+        containing_root = next(
+            (root for root in _managed_roots(inventory) if _safe_managed_path(directory, root)),
+            None,
+        )
+        while containing_root is not None and _safe_managed_path(current, containing_root):
             try:
                 current.rmdir()
             except OSError:
@@ -130,13 +166,9 @@ def _remove_tracked_files(inventory: UninstallInventory, summary: UninstallSumma
             current = current.parent
 
 
-def _remove_shared_dependencies(
-    inventory: UninstallInventory, summary: UninstallSummary
-) -> None:
+def _remove_shared_dependencies(inventory: UninstallInventory, summary: UninstallSummary) -> None:
     if inventory.provenance.playwright_browser:
-        result = subprocess.run(
-            [sys.executable, "-m", "playwright", "uninstall"], check=False
-        )
+        result = subprocess.run([sys.executable, "-m", "playwright", "uninstall"], check=False)
         if result.returncode == 0:
             summary.shared_removed.append("Playwright browsers for this installation")
         else:
@@ -154,9 +186,7 @@ def _remove_shared_dependencies(
             else:
                 apt_get = None
         if apt_get:
-            result = subprocess.run(
-                [*prefix, apt_get, "remove", "-y", *packages], check=False
-            )
+            result = subprocess.run([*prefix, apt_get, "remove", "-y", *packages], check=False)
             if result.returncode == 0:
                 summary.shared_removed.extend(f"apt:{package}" for package in packages)
             else:
@@ -195,10 +225,8 @@ def execute_uninstall(
         if purge_config:
             inventory.config_path.unlink(missing_ok=True)
             summary.config_removed = True
-            try:
+            with suppress(OSError):
                 inventory.config_path.parent.rmdir()
-            except OSError:
-                pass
         if purge_state and inventory.state_dir.exists():
             shutil.rmtree(_validated_private_tree(inventory.state_dir))
             summary.state_removed = True

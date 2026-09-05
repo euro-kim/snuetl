@@ -1,0 +1,67 @@
+{
+  "courses": [
+    {
+      "id": 101,
+      "name": "2026-2 Algorithms",
+      "course_code": "CSE101",
+      "term": {"id": 20262, "name": "2026-2"},
+      "syllabus_body": "<p>Course outline</p>"
+    }
+  ],
+  "folders": [
+    {"id": 1, "name": "course files", "parent_folder_id": null},
+    {"id": 2, "name": "Week 1", "parent_folder_id": 1}
+  ],
+  "files": [
+    {
+      "id": 201,
+      "display_name": "slides.pdf",
+      "folder_id": 2,
+      "url": "/files/201/download",
+      "size": 1024,
+      "updated_at": "2026-09-01T00:00:00Z",
+      "content_type": "application/pdf"
+    }
+  ],
+  "announcements": [
+    {
+      "id": 301,
+      "title": "Welcome",
+      "posted_at": "2026-09-01T00:00:00Z",
+      "html_url": "/announcements/301",
+      "message": "<p>Hello</p>"
+    }
+  ],
+  "pages": [
+    {
+      "url": "overview",
+      "title": "Overview",
+      "body": "<p>Overview</p>",
+      "updated_at": "2026-09-02T00:00:00Z"
+    }
+  ],
+  "assignments": [
+    {
+      "id": 401,
+      "name": "Homework 1",
+      "due_at": "2026-09-10T00:00:00Z",
+      "html_url": "/assignments/401"
+    }
+  ],
+  "modules": [
+    {
+      "id": 501,
+      "name": "Week 1",
+      "items": [
+        {
+          "id": 502,
+          "type": "ExternalTool",
+          "title": "Lecture",
+          "position": 1,
+          "html_url": "/modules/items/502",
+          "published": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,18 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from .adapters import DiscoveryService
-from .browser import (
-    authenticated_entry_url,
-    ensure_authenticated_page,
-    open_authenticated_browser,
-    persist_auth_state,
-)
 from .config import Config
 from .errors import DiscoveryError
+from .lms_session import AuthenticatedLmsSession
 from .models import ContentItem, Course, ModuleItem, RemoteFile
-from .profile import profile_lock
 from .state import StateStore
 
 
@@ -52,11 +46,15 @@ def _persist_result(
         _persist_courses(store, all_courses or result.courses)
         if kind == "files":
             for course in result.courses:
-                values = [remote for owner, remote in result.files if owner.remote_id == course.remote_id]
+                values = [
+                    remote for owner, remote in result.files if owner.remote_id == course.remote_id
+                ]
                 store.replace_catalog_files(course, values)
         elif kind == "articles":
             for course in result.courses:
-                values = [item for owner, item in result.items if owner.remote_id == course.remote_id]
+                values = [
+                    item for owner, item in result.items if owner.remote_id == course.remote_id
+                ]
                 store.replace_catalog_content(
                     course,
                     ("announcement", "page"),
@@ -65,7 +63,9 @@ def _persist_result(
                 )
         elif kind == "assignments":
             for course in result.courses:
-                values = [item for owner, item in result.items if owner.remote_id == course.remote_id]
+                values = [
+                    item for owner, item in result.items if owner.remote_id == course.remote_id
+                ]
                 store.replace_catalog_content(
                     course,
                     ("assignment",),
@@ -74,7 +74,9 @@ def _persist_result(
                 )
         elif kind == "videos":
             for course in result.courses:
-                values = [item for owner, item in result.modules if owner.remote_id == course.remote_id]
+                values = [
+                    item for owner, item in result.modules if owner.remote_id == course.remote_id
+                ]
                 store.replace_catalog_modules(course, values)
 
 
@@ -101,20 +103,15 @@ def inspect_catalog(
     course_query: str | None = None,
     headless: bool | None = None,
 ) -> CatalogResult:
-    effective_headless = config.headless if headless is None else headless
-    with (
-        profile_lock(config.lock_path),
-        open_authenticated_browser(config, headless=effective_headless) as (context, page),
-    ):
-        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-        ensure_authenticated_page(config, context, page)
-        discovery = DiscoveryService(context, page, timeout_seconds=config.timeout_seconds)
+    with AuthenticatedLmsSession(config, headless=headless) as session:
+        assert session.discovery is not None
+        discovery = session.discovery
         courses = [
             course
             for course in discovery.discover_courses()
             if course.remote_id not in config.excluded_course_ids
         ]
-        persist_auth_state(context, config, page.url)
+        session.persist(session.page.url)
         selected = select_courses(courses, course_query)
         if kind == "courses":
             result = CatalogResult(tuple(selected))
@@ -151,9 +148,7 @@ def inspect_catalog(
             return result
         if kind == "videos":
             modules = tuple(
-                (course, item)
-                for course in selected
-                for item in discovery.discover_modules(course)
+                (course, item) for course in selected for item in discovery.discover_modules(course)
             )
             result = CatalogResult(tuple(selected), modules=modules)
             _persist_result(config, result, kind, all_courses=tuple(courses))
@@ -165,16 +160,12 @@ def refresh_catalog(
     config: Config,
     *,
     headless: bool | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> CatalogRefreshSummary:
     """Fetch and atomically cache every canonical catalog entity."""
-    effective_headless = config.headless if headless is None else headless
-    with (
-        profile_lock(config.lock_path),
-        open_authenticated_browser(config, headless=effective_headless) as (context, page),
-    ):
-        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-        ensure_authenticated_page(config, context, page)
-        discovery = DiscoveryService(context, page, timeout_seconds=config.timeout_seconds)
+    with AuthenticatedLmsSession(config, headless=headless) as session:
+        assert session.discovery is not None
+        discovery = session.discovery
         courses = tuple(
             course
             for course in discovery.discover_courses()
@@ -185,11 +176,13 @@ def refresh_catalog(
         assignments_by_course: dict[str, list[ContentItem]] = {}
         modules_by_course: dict[str, list[ModuleItem]] = {}
         for course in courses:
+            if progress is not None:
+                progress(f"Refreshing {course.display_name}")
             files_by_course[course.remote_id] = discovery.discover_files(course)
             articles_by_course[course.remote_id] = discovery.discover_articles(course)
             assignments_by_course[course.remote_id] = discovery.discover_assignments(course)
             modules_by_course[course.remote_id] = discovery.discover_modules(course)
-        persist_auth_state(context, config, page.url)
+        session.persist(session.page.url)
 
     with StateStore(config.database_path) as store, store.transaction():
         _persist_courses(store, courses)

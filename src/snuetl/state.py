@@ -1,12 +1,30 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import ContentItem, Course, ModuleItem, RemoteFile, StoredFile
+
+
+@dataclass(frozen=True, slots=True)
+class DiscordJob:
+    job_id: str
+    command: str
+    arguments: dict[str, object]
+    requester_id: int
+    status: str
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    progress: str | None = None
+    channel_id: int | None = None
+    message_id: int | None = None
+    error: str | None = None
 
 
 def utc_now() -> str:
@@ -154,6 +172,22 @@ class StateStore:
                 unchanged INTEGER NOT NULL DEFAULT 0,
                 failed INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS discord_jobs (
+                job_id TEXT PRIMARY KEY,
+                command TEXT NOT NULL,
+                arguments_json TEXT NOT NULL,
+                requester_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                progress TEXT,
+                channel_id INTEGER,
+                message_id INTEGER,
+                error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS discord_jobs_status_idx
+                ON discord_jobs(status, created_at);
             """
         )
         # Columns are added independently so databases created by pre-catalog
@@ -167,6 +201,154 @@ class StateStore:
         self._ensure_column("catalog_content_items", "updated_at", "TEXT")
         self._ensure_column("catalog_content_items", "body_html", "TEXT")
         self.db.commit()
+
+    @staticmethod
+    def _discord_job(row: sqlite3.Row) -> DiscordJob:
+        arguments = json.loads(str(row["arguments_json"]))
+        return DiscordJob(
+            job_id=str(row["job_id"]),
+            command=str(row["command"]),
+            arguments=arguments if isinstance(arguments, dict) else {},
+            requester_id=int(row["requester_id"]),
+            status=str(row["status"]),
+            created_at=str(row["created_at"]),
+            started_at=str(row["started_at"]) if row["started_at"] else None,
+            finished_at=str(row["finished_at"]) if row["finished_at"] else None,
+            progress=str(row["progress"]) if row["progress"] else None,
+            channel_id=int(row["channel_id"]) if row["channel_id"] else None,
+            message_id=int(row["message_id"]) if row["message_id"] else None,
+            error=str(row["error"]) if row["error"] else None,
+        )
+
+    def create_discord_job(
+        self,
+        job_id: str,
+        command: str,
+        arguments: dict[str, object],
+        requester_id: int,
+        *,
+        channel_id: int | None = None,
+    ) -> DiscordJob:
+        if command not in {"refresh", "sync", "pull", "login"}:
+            raise ValueError(f"unsupported Discord job command: {command}")
+        forbidden = {"token", "password", "passwd", "cookie", "verification_code", "code"}
+        if any(str(key).casefold() in forbidden for key in arguments):
+            raise ValueError("Discord job arguments must not contain secrets")
+        queued = self.db.execute(
+            "SELECT COUNT(*) FROM discord_jobs WHERE status='queued'"
+        ).fetchone()[0]
+        if int(queued) >= 10:
+            raise ValueError("Discord job queue is full")
+        now = utc_now()
+        self.db.execute(
+            """INSERT INTO discord_jobs(
+                 job_id, command, arguments_json, requester_id, status, created_at, channel_id
+               ) VALUES (?, ?, ?, ?, 'queued', ?, ?)""",
+            (
+                job_id,
+                command,
+                json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
+                requester_id,
+                now,
+                channel_id,
+            ),
+        )
+        self.db.commit()
+        row = self.db.execute("SELECT * FROM discord_jobs WHERE job_id=?", (job_id,)).fetchone()
+        assert row is not None
+        return self._discord_job(row)
+
+    def list_discord_jobs(self, *, limit: int = 20) -> list[DiscordJob]:
+        rows = self.db.execute(
+            "SELECT * FROM discord_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [self._discord_job(row) for row in rows]
+
+    def get_discord_job(self, job_id: str) -> DiscordJob | None:
+        row = self.db.execute("SELECT * FROM discord_jobs WHERE job_id=?", (job_id,)).fetchone()
+        return self._discord_job(row) if row is not None else None
+
+    def next_discord_job(self) -> DiscordJob | None:
+        row = self.db.execute(
+            """SELECT * FROM discord_jobs WHERE status='queued'
+               ORDER BY created_at LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            return None
+        now = utc_now()
+        cursor = self.db.execute(
+            """UPDATE discord_jobs SET status='running', started_at=?
+               WHERE job_id=? AND status='queued'""",
+            (now, row["job_id"]),
+        )
+        self.db.commit()
+        if cursor.rowcount != 1:
+            return None
+        return self.get_discord_job(str(row["job_id"]))
+
+    def update_discord_job(
+        self,
+        job_id: str,
+        *,
+        status: str | None = None,
+        progress: str | None = None,
+        message_id: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        allowed = {
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancel_requested",
+            "cancelled",
+            "interrupted",
+        }
+        if status is not None and status not in allowed:
+            raise ValueError(f"invalid Discord job status: {status}")
+        updates: list[str] = []
+        values: list[object] = []
+        if status is not None:
+            updates.append("status=?")
+            values.append(status)
+            if status in {"completed", "failed", "cancelled", "interrupted"}:
+                updates.append("finished_at=?")
+                values.append(utc_now())
+        if progress is not None:
+            updates.append("progress=?")
+            values.append(progress[:1000])
+        if message_id is not None:
+            updates.append("message_id=?")
+            values.append(message_id)
+        if error is not None:
+            updates.append("error=?")
+            values.append(error[:2000])
+        if not updates:
+            return
+        values.append(job_id)
+        self.db.execute(f"UPDATE discord_jobs SET {', '.join(updates)} WHERE job_id=?", values)
+        self.db.commit()
+
+    def request_discord_job_cancel(self, job_id: str) -> bool:
+        cursor = self.db.execute(
+            """UPDATE discord_jobs SET status=CASE
+                 WHEN status='queued' THEN 'cancelled' ELSE 'cancel_requested' END,
+                 finished_at=CASE WHEN status='queued' THEN ? ELSE finished_at END
+               WHERE job_id=? AND status IN ('queued', 'running')""",
+            (utc_now(), job_id),
+        )
+        self.db.commit()
+        return cursor.rowcount == 1
+
+    def interrupt_discord_jobs(self) -> int:
+        cursor = self.db.execute(
+            """UPDATE discord_jobs SET status='interrupted', finished_at=?,
+                 error='Discord daemon restarted before this job completed'
+               WHERE status IN ('queued', 'running', 'cancel_requested')""",
+            (utc_now(),),
+        )
+        self.db.commit()
+        return cursor.rowcount
 
     def _ensure_column(self, table: str, column: str, declaration: str) -> None:
         existing = {row["name"] for row in self.db.execute(f"PRAGMA table_info({table})")}
@@ -258,9 +440,7 @@ class StateStore:
             ),
         )
 
-    def record_catalog_refresh(
-        self, scope: str, row_count: int, *, complete: bool = True
-    ) -> None:
+    def record_catalog_refresh(self, scope: str, row_count: int, *, complete: bool = True) -> None:
         self.db.execute(
             """INSERT INTO catalog_refreshes(scope, refreshed_at, row_count, complete)
                VALUES (?, ?, ?, ?)
@@ -273,7 +453,9 @@ class StateStore:
 
     def replace_catalog_files(self, course: Course, files: list[RemoteFile]) -> None:
         now = utc_now()
-        self.db.execute("UPDATE catalog_files SET available=0 WHERE course_id=?", (course.remote_id,))
+        self.db.execute(
+            "UPDATE catalog_files SET available=0 WHERE course_id=?", (course.remote_id,)
+        )
         for remote in files:
             self.db.execute(
                 """INSERT INTO catalog_files(
@@ -382,7 +564,9 @@ class StateStore:
             )
         self.record_catalog_refresh(f"modules:{course.remote_id}", len(items))
 
-    def get_artifact(self, artifact_type: str, course_id: str, source_id: str) -> sqlite3.Row | None:
+    def get_artifact(
+        self, artifact_type: str, course_id: str, source_id: str
+    ) -> sqlite3.Row | None:
         return self.db.execute(
             """SELECT * FROM pull_artifacts
                WHERE artifact_type=? AND course_id=? AND source_id=?""",

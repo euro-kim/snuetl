@@ -5,6 +5,7 @@ import logging
 import platform
 import shutil
 import sys
+import uuid
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -13,18 +14,24 @@ from rich.table import Table
 
 from . import __version__
 from .agent import emit, emit_error, envelope
-from .browser import select_profile, switch_profile
+from .browser_profiles import select_profile, switch_profile
 from .catalog import inspect_catalog, refresh_catalog
-from .config import Config, ConfigError, default_config_path, load_config, save_config
+from .cli_parser import CliUsageError, build_parser
+from .cli_runtime import handle_cli_exception
+from .config import Config, DirectoryRoute, default_config_path, load_config, save_config
 from .credentials import load_credentials
 from .directory_manager import (
+    directory_migration_conflicts,
+    directory_routes_data,
     execute_directory_migration,
     plan_directory_migration,
+    remove_directory_route,
     repair_legacy_layout,
+    resolve_cached_course_id,
+    upsert_directory_route,
     validate_managed_root,
 )
-from .errors import AuthenticationRequired, SnuetlError
-from .logging_utils import configure_logging, redact
+from .logging_utils import configure_logging
 from .onboarding import (
     browser_available,
     display_available,
@@ -36,7 +43,8 @@ from .onboarding import (
 from .profile import profile_lock
 from .puller import PullSummary, discover_pull_plan, execute_pull, plan_data
 from .query import execute_query
-from .scheduler import timer_is_enabled
+from .routing import parse_remote_folder
+from .scheduler import discord_service_is_enabled, linger_status, timer_is_enabled
 from .sql_shell import run_sql_shell
 from .state import StateStore
 from .syncer import synchronize
@@ -56,210 +64,16 @@ from .versioning import get_version_info, update_self
 
 LOGGER = logging.getLogger(__name__)
 
-
-class CliUsageError(ValueError):
-    pass
-
-
-class SnuetlArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
-        raise CliUsageError(message)
+# Compatibility alias for callers that previously inspected the private parser.
+_parser = build_parser
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = SnuetlArgumentParser(
-        prog="snuetl", description="Synchronize files from Seoul National University eTL"
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        help="configuration file (default: ~/.config/snuetl/config.toml)",
-    )
-    parser.add_argument("--verbose", action="store_true", help="enable diagnostic logs")
-    parser.add_argument("--json", action="store_true", help="emit a versioned JSON envelope")
-    parser.add_argument(
-        "--no-input", action="store_true", help="never prompt; fail when input is required"
-    )
-    parser.add_argument("--version", action="version", version=f"snuetl {__version__}")
-    subparsers = parser.add_subparsers(dest="command", parser_class=SnuetlArgumentParser)
-
-    def add_agent_flags(command: argparse.ArgumentParser) -> None:
-        command.add_argument(
-            "--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
-        )
-        command.add_argument(
-            "--no-input",
-            action="store_true",
-            default=argparse.SUPPRESS,
-            help=argparse.SUPPRESS,
-        )
-
-    def add_display_mode(command: argparse.ArgumentParser) -> None:
-        group = command.add_mutually_exclusive_group()
-        group.add_argument("--headless", action="store_true", help="do not show Chromium")
-        group.add_argument("--headed", action="store_true", help="show Chromium")
-
-    for name in ("setup", "onboard", "configure"):
-        setup = subparsers.add_parser(name, help="run guided setup")
-        add_display_mode(setup)
-        add_agent_flags(setup)
-
-    login = subparsers.add_parser("login", help="refresh trusted-browser authentication")
-    add_display_mode(login)
-    add_agent_flags(login)
-
-    sync = subparsers.add_parser("sync", help="download new and revised course files")
-    sync.add_argument("--headed", action="store_true", help="show the browser for troubleshooting")
-    add_agent_flags(sync)
-
-    status = subparsers.add_parser("status", help="show local enrollment and last-sync state")
-    add_agent_flags(status)
-    doctor = subparsers.add_parser("doctor", help="check dependencies and configuration")
-    add_agent_flags(doctor)
-    schema = subparsers.add_parser("schema", help="show canonical SQL tables and fields")
-    schema.add_argument("table", nargs="?", help="optional canonical table name")
-    add_agent_flags(schema)
-    version = subparsers.add_parser("version", help="show version and installation source")
-    version.add_argument("--check", action="store_true", help="check for a published update")
-    add_agent_flags(version)
-    update = subparsers.add_parser("update", help="update snuetl using pipx")
-    add_agent_flags(update)
-    capabilities = subparsers.add_parser(
-        "capabilities", help="describe the stable CLI contract for agents"
-    )
-    add_agent_flags(capabilities)
-
-    refresh = subparsers.add_parser(
-        "refresh", help="cache all paginated catalog data for SQL queries"
-    )
-    add_display_mode(refresh)
-    add_agent_flags(refresh)
-
-    for name in ("query", "sql"):
-        query = subparsers.add_parser(name, help="open or execute read-only catalog SQL")
-        source = query.add_mutually_exclusive_group()
-        source.add_argument("--execute", "-e", help="execute one SQL statement")
-        source.add_argument("--file", type=Path, help="execute SQL read from a file")
-        query.add_argument(
-            "--refresh",
-            action="store_true",
-            help="refresh every remote catalog table before querying",
-        )
-        query.add_argument(
-            "--format",
-            choices=("table", "json", "jsonl", "csv"),
-            default="table",
-            help="output format (default: table)",
-        )
-        query.add_argument(
-            "--limit",
-            type=int,
-            default=200,
-            help="maximum output rows; 0 means all (default: 200)",
-        )
-        add_display_mode(query)
-        add_agent_flags(query)
-
-    pull = subparsers.add_parser("pull", help="pull course content into the managed directory")
-    pull.add_argument(
-        "kind", nargs="?", choices=("all", "files", "articles", "syllabus", "videos"), default="all"
-    )
-    pull.add_argument("--course", action="append", default=[], help="course ID or unique title")
-    pull.add_argument("--semester", action="append", default=[], help="canonical semester code")
-    pull.add_argument("--directory", type=Path, help="override the managed root for this pull")
-    pull.add_argument(
-        "--dry-run", action="store_true", help="discover and estimate without writing"
-    )
-    pull.add_argument("--yes", action="store_true", help="accept bulk video download consent")
-    pull.add_argument(
-        "--video-id",
-        "--video",
-        dest="video_ids",
-        action="append",
-        default=[],
-        help="select a video by ID (repeatable; for Hermes and unattended use)",
-    )
-    pull.add_argument(
-        "--force", action="store_true", help="overwrite locally edited generated content"
-    )
-    pull.add_argument(
-        "--best", action="store_true", help="download the best available video quality"
-    )
-    pull.add_argument("--max-height", type=int, default=1080, help="maximum video height")
-    pull.add_argument("--no-captions", action="store_true", help="do not download video captions")
-    pull.add_argument("--jobs", type=int, default=1, help="video download concurrency (default: 1)")
-    add_agent_flags(pull)
-
-    profile = subparsers.add_parser("profile", help="list or switch the active eTL identity")
-    profile.add_argument("name", nargs="?", help="profile label (substring match is allowed)")
-    add_display_mode(profile)
-    add_agent_flags(profile)
-
-    directory = subparsers.add_parser("directory", help="show or configure the managed pull root")
-    directory.add_argument("path", nargs="?", type=Path)
-    directory.add_argument(
-        "--move", action="store_true", help="move tracked files to the new layout"
-    )
-    directory.add_argument(
-        "--dry-run", action="store_true", help="show the migration without changing it"
-    )
-    directory.add_argument("--yes", action="store_true", help="confirm the requested migration")
-    add_agent_flags(directory)
-
-    for name, description in (
-        ("courses", "list active courses"),
-        ("files", "list files without downloading them"),
-        ("articles", "list announcements and course-page titles"),
-        ("assignments", "list assignments and due dates"),
-    ):
-        command = subparsers.add_parser(name, help=description)
-        if name != "courses":
-            command.add_argument(
-                "course",
-                nargs="?",
-                help="course ID or a unique part of its name; defaults to all courses",
-            )
-        add_display_mode(command)
-        add_agent_flags(command)
-
-    logout = subparsers.add_parser(
-        "logout", help="remove browser authentication and saved credentials"
-    )
-    logout.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
-    add_agent_flags(logout)
-
-    uninstall = subparsers.add_parser("uninstall", help="remove snuetl and selected local data")
-    uninstall.add_argument(
-        "--dry-run", action="store_true", help="show everything that would be removed"
-    )
-    uninstall.add_argument(
-        "--yes", action="store_true", help="confirm using the selected safe defaults"
-    )
-    uninstall.add_argument(
-        "--delete-files", action="store_true", help="delete tracked pulled course content"
-    )
-    uninstall.add_argument("--purge-config", action="store_true", help="remove configuration")
-    uninstall.add_argument(
-        "--purge-state", action="store_true", help="remove login, credentials, and history"
-    )
-    uninstall.add_argument(
-        "--purge", action="store_true", help="remove both configuration and state"
-    )
-    uninstall.add_argument(
-        "--remove-shared-deps",
-        action="store_true",
-        help="remove Chromium/FFmpeg only when recorded as installed by snuetl",
-    )
-    add_agent_flags(uninstall)
-    return parser
-
-
-def _headless_choice(args: argparse.Namespace) -> bool:
+def _headless_choice(args: argparse.Namespace, config: Config | None = None) -> bool:
     if getattr(args, "headed", False):
         return False
     if getattr(args, "headless", False):
         return True
-    return not display_available()
+    return config.headless if config is not None else not display_available()
 
 
 def _login(config: Config, *, headless: bool, config_path: Path | None) -> int:
@@ -367,12 +181,21 @@ def _status_data(config: Config) -> dict[str, object]:
         "saved_username": saved.username if saved else None,
         "state_dir": str(config.state_dir),
         "download_dir": str(config.download_dir),
+        "headless": config.headless,
+        "directory_routes": directory_routes_data(config),
         "last_sync": None,
         "courses": 0,
         "remote_files": 0,
         "articles": 0,
         "assignments": 0,
         "downloaded_files": 0,
+        "discord": {
+            "enabled": config.discord.enabled,
+            "configured": config.discord.configured,
+            "service_enabled": discord_service_is_enabled()
+            if platform.system() == "Linux"
+            else False,
+        },
     }
     if not config.database_path.exists():
         return data
@@ -457,8 +280,24 @@ def _capabilities() -> dict[str, object]:
                 "noninteractive": ["--execute", "--file", "stdin"],
             },
             "pull": ["files", "articles", "syllabus", "videos", "all"],
+            "discord": [
+                "status",
+                "doctor",
+                "courses",
+                "files",
+                "articles",
+                "assignments",
+                "refresh",
+                "sync",
+                "pull",
+                "login",
+                "jobs",
+                "cancel",
+            ],
+            "discord_management": ["guide", "setup", "status", "enable", "disable", "owner"],
             "maintenance": [
                 "refresh",
+                "headless",
                 "directory",
                 "profile",
                 "status",
@@ -466,6 +305,7 @@ def _capabilities() -> dict[str, object]:
                 "version",
                 "update",
                 "uninstall",
+                "discord",
             ],
         },
         "agent_flags": ["--json", "--no-input", "--yes", "--dry-run", "--video-id"],
@@ -524,8 +364,223 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
                 "optional": True,
             }
         )
+        if config.discord.configured:
+            linger = linger_status()
+            checks.extend(
+                [
+                    {
+                        "name": "discord_service",
+                        "ok": discord_service_is_enabled(),
+                        "detail": "user systemd service",
+                        "optional": True,
+                    },
+                    {
+                        "name": "user_linger",
+                        "ok": linger.enabled,
+                        "detail": linger.detail,
+                        "optional": True,
+                    },
+                ]
+            )
     required = [check for check in checks if not check.get("optional")]
     return {"ready": all(bool(check["ok"]) for check in required), "checks": checks}
+
+
+def _run_discord_command(config: Config, args: argparse.Namespace) -> int:
+    from .discord_setup import (
+        change_discord_owner,
+        configure_discord,
+        discord_setup_guide,
+        discord_status,
+        print_discord_setup_guide,
+        print_discord_setup_success,
+        restart_discord_if_enabled,
+        toggle_discord,
+    )
+
+    action = args.discord_command or "setup"
+    if action == "guide":
+        data = discord_setup_guide()
+        if args.json:
+            emit(envelope("discord guide", data=data))
+        else:
+            print_discord_setup_guide()
+        return 0
+    if action == "run":
+        from .discord_bot import run_discord_bot
+
+        run_discord_bot(config)
+        return 0
+    if action == "status":
+        data = discord_status(config)
+        ready = bool(data["configured"] and data["token_present"])
+        emit(envelope("discord status", data=data, ok=ready)) if args.json else console.print_json(
+            data=data
+        )
+        return 0 if ready else 1
+    if action in {"enable", "disable"}:
+        updated = toggle_discord(config, action == "enable", args.config)
+        data = discord_status(updated)
+        emit(envelope(f"discord {action}", data=data)) if args.json else console.print_json(
+            data=data
+        )
+        return 0
+    if action == "owner":
+        if args.discord_owner_command == "list":
+            data = {"owner_ids": sorted(config.discord.owner_ids)}
+        else:
+            updated = change_discord_owner(
+                config, args.user_id, add=args.discord_owner_command == "add"
+            )
+            save_config(updated, args.config)
+            restart_discord_if_enabled(updated)
+            data = {"owner_ids": sorted(updated.discord.owner_ids), "restart_required": True}
+        emit(envelope("discord owner", data=data)) if args.json else console.print_json(data=data)
+        return 0
+    if args.no_input or args.json:
+        required = (
+            args.token_file
+            and args.application_id
+            and args.guild_id
+            and args.channel_id
+            and args.owner_id
+            and args.yes
+        )
+        if not required:
+            if args.json:
+                emit_error(
+                    "discord setup",
+                    "INPUT_REQUIRED",
+                    "Discord setup needs pairing details.",
+                    "Pass --token-file, --application-id, --guild-id, --channel-id, --owner-id, and --yes.",
+                )
+            return 5
+    _updated, data = configure_discord(
+        config,
+        config_path=args.config,
+        token_file=args.token_file,
+        application_id=args.application_id,
+        guild_id=args.guild_id,
+        channel_id=args.channel_id,
+        owner_ids=tuple(args.owner_id),
+        confirmed=args.yes,
+    )
+    if args.json:
+        emit(envelope("discord setup", data=data))
+    else:
+        print_discord_setup_success(data)
+    return 0
+
+
+def _refresh_discord_directory_access(config: Config, config_path: Path) -> None:
+    if not config.discord.enabled or not discord_service_is_enabled():
+        return
+    from .scheduler import install_discord_service
+
+    install_discord_service(
+        config_path,
+        state_dir=config.state_dir,
+        download_dir=config.download_dir,
+        write_dirs=tuple(route.destination for route in config.directory_routes),
+    )
+
+
+def _run_directory(config: Config, args: argparse.Namespace) -> int:
+    operation = args.operation
+    if operation in {None, "list"}:
+        data = {
+            "managed_root": str(config.download_dir),
+            "automatic_migration": True,
+            "routes": directory_routes_data(config),
+        }
+        emit(envelope("directory", data=data)) if args.json else console.print_json(data=data)
+        return 0
+
+    config_path = (args.config or default_config_path()).expanduser().resolve()
+    updated = config
+    root = config.download_dir
+    action = operation
+    if operation == "set":
+        if not args.value:
+            raise ValueError("directory set requires a destination path")
+        root = validate_managed_root(Path(args.value))
+        updated = replace(config, download_dir=root)
+    elif operation == "bind":
+        if not args.value:
+            raise ValueError("directory bind requires a destination path")
+        remote_folder = parse_remote_folder(args.remote_folder or "")
+        route = DirectoryRoute(
+            route_id=args.name or f"route-{uuid.uuid4().hex[:8]}",
+            destination=validate_managed_root(Path(args.value)),
+            course_id=resolve_cached_course_id(config, args.course),
+            semester_code=args.semester,
+            kind=args.kind,
+            remote_folder=remote_folder,
+        )
+        updated = upsert_directory_route(config, route)
+    elif operation == "unbind":
+        if not args.value:
+            raise ValueError("directory unbind requires a route name")
+        updated = remove_directory_route(config, args.value)
+    elif args.value is not None:
+        raise ValueError(f"unknown directory operation: {operation}")
+    else:
+        # Backwards-compatible `snuetl directory PATH` form.
+        action = "set"
+        root = validate_managed_root(Path(operation))
+        updated = replace(config, download_dir=root)
+
+    entries = [] if args.no_migrate else plan_directory_migration(updated, updated.download_dir)
+    conflicts = directory_migration_conflicts(entries)
+    data: dict[str, object] = {
+        "action": action,
+        "managed_root": str(updated.download_dir),
+        "routes": directory_routes_data(updated),
+        "migration": {
+            "automatic": not args.no_migrate,
+            "planned": len(entries),
+            "conflicts": conflicts,
+        },
+        "entries": [
+            {
+                "record_type": item.record_type,
+                "course_id": item.course_id,
+                "source_id": item.source_id,
+                "source": str(item.source),
+                "destination": str(item.destination),
+            }
+            for item in entries
+            if item.source != item.destination
+        ],
+    }
+    if conflicts:
+        if args.json or args.dry_run:
+            emit(envelope("directory", data=data, ok=False)) if args.json else console.print_json(
+                data=data
+            )
+            return 3
+        raise ValueError(
+            "automatic migration stopped before moving anything: " + "; ".join(conflicts)
+        )
+    if args.dry_run:
+        emit(envelope("directory", data=data)) if args.json else console.print_json(data=data)
+        return 0
+
+    summary = execute_directory_migration(updated, entries)
+    updated.download_dir.mkdir(parents=True, exist_ok=True)
+    for route in updated.directory_routes:
+        route.destination.mkdir(parents=True, exist_ok=True)
+    save_config(updated, config_path)
+    _refresh_discord_directory_access(updated, config_path)
+    data["migration"] = {
+        "automatic": not args.no_migrate,
+        **asdict(summary),
+        "conflicts": [],
+    }
+    emit(
+        envelope("directory", data=data, ok=summary.failed == 0)
+    ) if args.json else console.print_json(data=data)
+    return 4 if summary.failed else 0
 
 
 def _read_sql(args: argparse.Namespace) -> str | None:
@@ -554,7 +609,7 @@ def _video_choices(plan: object) -> list[tuple[str, str]]:
 
 
 def _run_profile(config: Config, args: argparse.Namespace) -> int:
-    headless = _headless_choice(args)
+    headless = _headless_choice(args, config)
     labels: list[str]
     selected: str | None = None
     if args.name:
@@ -689,7 +744,7 @@ def _run_uninstall(config: Config, args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     actual_argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = _parser().parse_args(actual_argv)
+        args = build_parser().parse_args(actual_argv)
     except CliUsageError as exc:
         if _json_requested(actual_argv):
             emit_error("parse", "INVALID_ARGUMENT", str(exc), "Run snuetl --help for valid syntax.")
@@ -735,6 +790,8 @@ def main(argv: list[str] | None = None) -> int:
                 console.print_json(data=_capabilities())
             return 0
         config = load_config(args.config)
+        if args.command == "discord":
+            return _run_discord_command(config, args)
         if args.command is None:
             auth_ready = (
                 config.profile_dir.exists() and config.auth_state_path.exists()
@@ -782,6 +839,24 @@ def main(argv: list[str] | None = None) -> int:
             elif args.headed:
                 forced = False
             return run_setup(args.config, force_headless=forced)
+        if args.command == "headless":
+            mode = args.mode
+            if mode is None and not (args.no_input or args.json):
+                enabled = Confirm.ask(
+                    "Use headless Chromium by default?",
+                    default=config.headless,
+                )
+                mode = "on" if enabled else "off"
+            updated = config
+            if mode is not None:
+                updated = replace(config, headless=mode == "on")
+                save_config(updated, args.config)
+            data = {
+                "headless": updated.headless,
+                "browser_mode": "headless" if updated.headless else "visible",
+            }
+            emit(envelope("headless", data=data)) if args.json else console.print_json(data=data)
+            return 0
         if args.command == "login":
             if args.no_input or args.json:
                 if args.json:
@@ -794,9 +869,9 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     LOGGER.error("login requires terminal input")
                 return 5
-            return _login(config, headless=_headless_choice(args), config_path=args.config)
+            return _login(config, headless=_headless_choice(args, config), config_path=args.config)
         if args.command == "sync":
-            summary = synchronize(config, headless=False if args.headed else None)
+            summary = synchronize(config, headless=_headless_choice(args, config))
             if args.json:
                 emit(envelope("sync", data=asdict(summary)))
                 return 4 if summary.failed else 0
@@ -823,7 +898,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if data["ready"] else 1
             return run_doctor(config, args.config)
         if args.command == "refresh":
-            summary = refresh_catalog(config, headless=_headless_choice(args))
+            summary = refresh_catalog(config, headless=_headless_choice(args, config))
             if args.json:
                 emit(envelope("refresh", data=asdict(summary)))
                 return 0
@@ -842,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command in {"query", "sql"}:
             if args.refresh:
-                summary = refresh_catalog(config, headless=_headless_choice(args))
+                summary = refresh_catalog(config, headless=_headless_choice(args, config))
                 LOGGER.info(
                     "catalog refreshed courses=%d files=%d articles=%d assignments=%d",
                     summary.courses,
@@ -855,7 +930,9 @@ def main(argv: list[str] | None = None) -> int:
                 if sys.stdin.isatty() and not args.json:
                     return run_sql_shell(
                         config.database_path,
-                        refresh=lambda: refresh_catalog(config, headless=_headless_choice(args)),
+                        refresh=lambda: refresh_catalog(
+                            config, headless=_headless_choice(args, config)
+                        ),
                         output_format=args.format,
                         limit=args.limit,
                     )
@@ -883,9 +960,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--max-height and --jobs must be positive")
             # Normalize folders produced by older releases before this pull so
             # files, articles, syllabi, and videos share one course directory.
+            pull_config = replace(config, headless=_headless_choice(args, config))
             repair_legacy_layout(validate_managed_root(args.directory or config.download_dir))
             plan = discover_pull_plan(
-                config,
+                pull_config,
                 kinds,
                 course_selectors=tuple(args.course),
                 semesters=tuple(args.semester),
@@ -910,7 +988,7 @@ def main(argv: list[str] | None = None) -> int:
                 plan = replace(plan, selected_video_ids=selected_ids)
             root = validate_managed_root(args.directory or config.download_dir)
             summary = execute_pull(
-                config,
+                pull_config,
                 plan,
                 root=root,
                 dry_run=args.dry_run,
@@ -933,59 +1011,13 @@ def main(argv: list[str] | None = None) -> int:
                 _print_pull_summary(summary, root)
             return 4 if summary.partial else 0
         if args.command == "directory":
-            if args.path is None:
-                data = {"managed_root": str(config.download_dir)}
-                emit(envelope("directory", data=data)) if args.json else console.print(
-                    str(config.download_dir)
-                )
-                return 0
-            root = validate_managed_root(args.path)
-            entries = plan_directory_migration(config, root) if args.move else []
-            if args.move and entries and not args.dry_run and not args.yes:
-                if args.no_input or args.json:
-                    if args.json:
-                        emit_error(
-                            "directory",
-                            "INPUT_REQUIRED",
-                            "Moving tracked files requires confirmation.",
-                            "Review with --dry-run, then pass --yes.",
-                        )
-                    return 5
-                if not Confirm.ask(
-                    f"Move {len(entries)} tracked artifact(s) to {root}?", default=False
-                ):
-                    return 0
-            summary = execute_directory_migration(config, entries, dry_run=args.dry_run)
-            legacy = repair_legacy_layout(root, dry_run=args.dry_run) if args.move else None
-            if legacy is not None:
-                summary.planned += legacy.planned
-                summary.moved += legacy.moved
-                summary.missing += legacy.missing
-                summary.failed += legacy.failed
-            if not args.dry_run:
-                save_config(replace(config, download_dir=root), args.config)
-            data = {
-                "managed_root": str(root),
-                "migration": asdict(summary),
-                "entries": [
-                    {
-                        "record_type": item.record_type,
-                        "course_id": item.course_id,
-                        "source_id": item.source_id,
-                        "source": str(item.source),
-                        "destination": str(item.destination),
-                    }
-                    for item in entries
-                ],
-            }
-            emit(envelope("directory", data=data)) if args.json else console.print_json(data=data)
-            return 4 if summary.failed else 0
+            return _run_directory(config, args)
         if args.command in {"courses", "files", "articles", "assignments"}:
             result = inspect_catalog(
                 config,
                 kind=args.command,
                 course_query=getattr(args, "course", None),
-                headless=_headless_choice(args),
+                headless=_headless_choice(args, config),
             )
             if args.json:
                 emit(envelope(args.command, data=_catalog_data(result, args.command)))
@@ -1009,64 +1041,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "uninstall":
             return _run_uninstall(config, args)
         raise AssertionError(f"unexpected command {args.command}")
-    except AuthenticationRequired as exc:
-        if getattr(args, "json", False):
-            emit_error(
-                args.command or "snuetl",
-                "AUTHENTICATION_REQUIRED",
-                str(redact(exc)),
-                "Run snuetl login interactively.",
-            )
-        else:
-            LOGGER.error("authentication required: %s", exc)
-        return 2
-    except (ConfigError, OSError, ValueError) as exc:
-        if getattr(args, "json", False):
-            emit_error(
-                args.command or "snuetl",
-                "LOCAL_STATE_ERROR",
-                str(redact(exc)),
-                "Check the command arguments and run snuetl doctor.",
-            )
-        else:
-            LOGGER.error("configuration or local-state error: %s", exc)
-        return 3
-    except SnuetlError as exc:
-        if getattr(args, "json", False):
-            emit_error(
-                args.command or "snuetl",
-                "COMMAND_FAILED",
-                str(redact(exc)),
-                "Retry with --verbose or run snuetl doctor.",
-            )
-        else:
-            LOGGER.error("command failed: %s", exc)
-        return 1
-    except (KeyboardInterrupt, EOFError):
-        if getattr(args, "json", False):
-            emit_error(
-                args.command or "snuetl",
-                "CANCELLED",
-                "Cancelled by user.",
-                "Run the command again when ready.",
-            )
-        else:
-            LOGGER.error("cancelled")
-        return 130
-    except Exception as exc:
-        # Browser installation/launch errors and unexpected LMS changes should
-        # be concise in scheduled logs. --verbose enables the underlying
-        # libraries' diagnostic output without exposing terminal credentials.
-        if getattr(args, "json", False):
-            emit_error(
-                args.command or "snuetl",
-                "UNEXPECTED_FAILURE",
-                str(redact(exc)),
-                "Retry with --verbose and report the failure if it persists.",
-            )
-        else:
-            LOGGER.error("unexpected failure: %s", exc)
-        return 1
+    except (Exception, KeyboardInterrupt) as exc:
+        return handle_cli_exception(args, exc)
 
 
 if __name__ == "__main__":  # pragma: no cover

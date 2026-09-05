@@ -53,6 +53,68 @@ def test_pull_videos_has_no_profile_selection_option() -> None:
     assert not hasattr(args, "profile")
 
 
+def test_discord_cli_exposes_daemon_and_owner_commands() -> None:
+    status = cli._parser().parse_args(["discord", "status", "--json"])
+    owner = cli._parser().parse_args(["discord", "owner", "add", "123"])
+    guide = cli._parser().parse_args(["discord", "guide", "--json"])
+
+    assert status.discord_command == "status"
+    assert status.json is True
+    assert owner.discord_owner_command == "add"
+    assert owner.user_id == 123
+    assert guide.discord_command == "guide"
+    assert guide.json is True
+
+
+def test_discord_guide_is_available_before_setup(tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "missing.toml"
+
+    assert main(["--config", str(config_path), "discord", "guide", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["installation"]["permissions_integer"] == 68608
+    assert payload["data"]["bot_settings"]["privileged_gateway_intents"] == {
+        "presence": False,
+        "server_members": False,
+        "message_content": False,
+    }
+
+
+def test_headless_command_persists_default(tmp_path: Path, capsys) -> None:
+    path = tmp_path / "config.toml"
+    save_config(load_config(tmp_path / "missing.toml"), path)
+
+    assert main(["--config", str(path), "headless", "off", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"] == {"headless": False, "browser_mode": "visible"}
+    assert load_config(path).headless is False
+
+
+def test_directory_parser_supports_detailed_binding() -> None:
+    args = cli._parser().parse_args(
+        [
+            "directory",
+            "bind",
+            "/srv/classes/A/B",
+            "--name",
+            "week-y",
+            "--course",
+            "101",
+            "--semester",
+            "2026-2",
+            "--kind",
+            "files",
+            "--remote-folder",
+            "x/y",
+        ]
+    )
+
+    assert args.operation == "bind"
+    assert args.value == "/srv/classes/A/B"
+    assert args.remote_folder == "x/y"
+
+
 def test_video_checklist_selection_is_passed_to_pull_plan(monkeypatch) -> None:
     course = Course("course-1", "Course", "https://lms.test/courses/course-1")
     first = ModuleItem("module-1", "Week 1", "video-1", course.remote_id, "ExternalTool", "First")

@@ -83,8 +83,11 @@ snuetl login
 
 The command selects SNU's ID/password tab, requests the chosen email/SMS code, and
 enters the terminal-provided code. It explicitly asks whether to select SNU's
-trusted-browser option; the default is yes. The browser is visible on desktop systems
-and headless on servers by default.
+trusted-browser option; the default is yes. Setup chooses a sensible initial browser
+mode for the machine. Use `snuetl headless on` or `snuetl headless off` to save the
+default for future browser-backed terminal commands; `--headless` and `--headed`
+override it for one command. The Discord daemon always uses headless mode because it
+cannot depend on a desktop session.
 
 If credential saving is accepted, the ID and password are written in plaintext to
 `~/.local/state/snuetl/credentials.json`. The file mode is `0600` and its directory is
@@ -106,6 +109,25 @@ run `snuetl login` to replace the saved credential.
 Do not copy a desktop browser profile to a server. Run the terminal wizard directly on
 the server so SNU trusts that machine's dedicated profile.
 
+## Local storage
+
+`snuetl` follows the XDG directory convention and does not create `~/.snuetl`:
+
+- `~/.config/snuetl/config.toml` stores normal settings, including the download root,
+  browser mode, directory routes, and Discord server/channel/owner IDs.
+- `~/.local/state/snuetl/` stores private runtime state: `state.db`, the browser
+  profile and auth state, optional `credentials.json`, install provenance, and
+  `discord-token`. Discord jobs are persisted in `state.db`.
+- `~/Downloads/snuetl/` is the default pulled-content root; setup or
+  `snuetl directory` can change it.
+
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` relocate the first two roots. The config and
+secret files are owner-only (`0600`) and the state directory is `0700`. The Discord
+token is deliberately separate from TOML so it does not appear beside ordinary
+configuration, but both the token and optional SNU credential file are plaintext secrets
+and must be protected accordingly.
+
+
 ## Commands
 
 Bare `snuetl` displays current local status and the command menu after onboarding.
@@ -124,7 +146,8 @@ snuetl sql --execute SQL        run one SQL query over cached metadata
 snuetl schema                   show canonical tables and field names
 snuetl pull [KIND]              pull files, articles, syllabi, videos, or all
 snuetl sync                     compatibility alias for pulling files
-snuetl directory [PATH]         show or change the managed pull root
+snuetl headless [on|off]        show or set the default browser mode
+snuetl directory                show or configure pull roots and routing rules
 snuetl capabilities --json      describe the stable agent-facing contract
 snuetl status                   show the last sync and tracked counts
 snuetl doctor                   check browser, config, profile, and timer
@@ -132,11 +155,142 @@ snuetl version [--check]        show the installed and published versions
 snuetl update                   update the pipx installation
 snuetl logout                   remove browser authentication and saved credentials
 snuetl uninstall                remove the app and optionally its local data
+snuetl discord                  pair Discord and install its user daemon
+snuetl discord guide            show exact Developer Portal setup steps
 ```
 
 `COURSE` may be an exact course ID or a unique portion of its title. Leave it out to
-show content from every active course. Add `--headed` to browser-backed commands for
-diagnostics.
+show content from every active course. The saved headless preference applies to every
+browser-backed terminal command; add `--headed` or `--headless` for a one-command
+override.
+
+## Discord remote control
+
+Discord remote control is intended for a private, self-hosted server where the owner
+wants to start work from a phone without SSH. Complete `snuetl setup` first and choose
+to save the SNU credentials. You also need Discord's **Manage Server** permission on the
+server where the private bot will be installed.
+
+Run the standalone guide whenever you want instructions without changing anything:
+
+```bash
+snuetl discord guide
+```
+
+Run the actual wizard when ready:
+
+```bash
+snuetl discord
+```
+
+The wizard displays these steps as you work:
+
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications),
+   choose **New Application**, enter a name such as `snuetl`, and create it.
+2. On **General Information**, copy **Application ID** and paste it at the wizard prompt.
+   Application ID is a numeric, non-secret value. Do not paste Public Key, Client Secret,
+   or your personal Discord user ID.
+3. Open **Bot** in the application sidebar. Under **Token**, choose **Reset Token**,
+   complete Discord's confirmation, copy the newly issued token, and paste it into
+   snuetl's hidden prompt. Discord normally shows a newly reset token only once.
+4. On **Installation**, ensure **Guild Install** is enabled. User Install is not needed.
+   On **Bot**, leave **Require OAuth2 Code Grant** off. The Presence, Server Members, and
+   Message Content privileged intents can all remain off.
+5. Open the least-privilege invite printed by snuetl, select **Add to server**, choose the
+   target server, and authorize it. The generated link requests only the `bot` and
+   `applications.commands` scopes and permission integer `68608`.
+6. Create or choose one normal text channel, ideally a private channel named `#snuetl`.
+   Enter `/snuetl claim` there and paste the one-time code from the terminal into
+   Discord's `code` field. The code expires after ten minutes. The person who claims it
+   becomes the first authorized snuetl owner.
+
+The bot needs exactly these three channel permissions:
+
+| Permission | Why |
+| --- | --- |
+| View Channel | Access the one bound channel |
+| Send Messages | Post progress and final results |
+| Read Message History | Keep responses usable across reconnects |
+
+Do **not** grant Administrator, Manage Server, Manage Channels, Manage Roles, or Manage
+Messages. For stronger Discord-side isolation after installation, open **Server Settings
+→ Roles**, select the bot role, and remove its three server-wide permissions. Then open
+**Edit Channel → Permissions** on `#snuetl`, add the bot role, and explicitly allow the
+three permissions there. Independently of Discord's visibility settings, snuetl checks
+every slash command, autocomplete request, button, select, and modal and rejects anything
+outside the claimed server, channel, and owner allowlist.
+
+The token is a password. Never paste it into Discord, a command-line argument, a chat
+message, or source control. If it is exposed, immediately use **Developer Portal → Bot →
+Reset Token** and rerun `snuetl discord`. snuetl stores it separately at
+`~/.local/state/snuetl/discord-token` with mode `0600`; it is never stored in TOML,
+SQLite job arguments, logs, command-line arguments, or Discord messages.
+
+Setup installs and starts `~/.config/systemd/user/snuetl-discord.service`. For a server
+that must keep the user service alive after logout, `snuetl discord status` reports
+whether linger is active and prints the exact remediation when needed:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+The bot uses slash commands and Discord's Gateway, so it needs no public web server,
+redirect URL, Interactions Endpoint URL, client secret, or Message Content intent.
+
+Available mobile commands are `/snuetl status`, `doctor`, `courses`, `files`, `articles`,
+`assignments`, `refresh`, `sync`, `pull`, `login`, `jobs`, and `cancel`. Administrative
+terminal operations such as setup, SQL, directory changes, profile switching, update,
+logout, and uninstall are deliberately unavailable in Discord. Downloads remain on the
+server; Discord receives counts, warnings, progress, and paths relative to the managed
+download root, never file uploads.
+
+Long operations use a persistent serialized queue: one job runs at a time and up to ten
+wait. A daemon restart marks unfinished jobs interrupted instead of silently replaying
+them. `/snuetl cancel JOB_ID` requests cancellation at the next course, item, or video
+download progress checkpoint. Controls and catalog results are ephemeral, while durable
+progress and final summaries are posted in the bound channel.
+
+`/snuetl pull kind:videos` replaces the terminal checklist with a ten-minute paginated
+multi-select that preserves choices across pages and works on Discord mobile. Force mode
+requires an extra overwrite confirmation. `/snuetl login` uses only the credentials
+already saved on the server; if SNU requests additional verification, an authorized
+owner enters the email/SMS code in a private Discord modal. SNU passwords are never
+accepted through Discord.
+
+Useful lifecycle commands are:
+
+```bash
+snuetl discord status
+snuetl discord disable
+snuetl discord enable
+snuetl discord owner list
+snuetl discord owner add USER_ID
+snuetl discord owner remove USER_ID
+snuetl discord run                 # foreground diagnostics
+```
+
+For provisioning, keep the token in an owner-only file and avoid shell history:
+
+```bash
+chmod 600 /secure/path/discord-token
+snuetl --no-input discord setup \
+  --token-file /secure/path/discord-token \
+  --application-id APP_ID --guild-id SERVER_ID --channel-id CHANNEL_ID \
+  --owner-id USER_ID --yes
+```
+
+
+For the numeric IDs used by non-interactive setup, enable **Discord Settings → Advanced
+→ Developer Mode**. Then right-click the server icon and choose **Copy Server ID**,
+right-click the channel and choose **Copy Channel ID**, and right-click your account and
+choose **Copy User ID**. On mobile, enable Developer Mode under **Settings → Advanced**,
+then long-press the corresponding server, channel, or user and choose the copy-ID action.
+The interactive claim flow discovers these three IDs automatically.
+
+Discord's current official walkthrough is available in
+[Building your first Discord Bot](https://docs.discord.com/developers/quick-start/getting-started);
+its [permissions reference](https://docs.discord.com/developers/topics/permissions)
+documents the three permission bits in the generated invite.
 
 The human-readable tables show semester codes separately (`2026-2`, `SNUON`), use
 canonical course IDs, and keep file names and folders distinct in storage. The table
@@ -254,9 +408,52 @@ checklist (including an All checkbox); non-interactive callers such as Hermes ca
 or more `--video-id` values, or `--yes` to select all. Use `--best` to remove the height cap,
 and inspect `--dry-run` first because provider-reported sizes are often unavailable.
 
-`snuetl directory` prints the root. `snuetl directory PATH` changes it for future
-pulls without moving existing data. Add `--move --dry-run` to inspect a checksum-safe
-migration and then `--move --yes` to perform it.
+`snuetl directory` prints the default root and every routing rule. Changing the root or
+a rule automatically migrates files and generated artifacts that snuetl tracks in its
+database. Migration copies and verifies checksums before replacing paths in the database;
+if two records target the same path, or a destination already contains different
+content, the whole migration stops before moving anything. Preview any change with
+`--dry-run`, or use `--no-migrate` to change only future placement:
+
+```bash
+snuetl directory
+snuetl directory set /data/classes --dry-run
+snuetl directory set /data/classes
+snuetl directory /data/classes              # shorthand for "set"
+snuetl directory bind /data/classes/A --name x --kind files --remote-folder x
+snuetl directory bind /data/classes/A/B --name y --kind files --remote-folder y
+snuetl directory bind /data/classes/A/C --name z --kind files --remote-folder z
+snuetl directory unbind y
+```
+
+A binding can match any combination of cached course ID or unique title, canonical
+semester, content kind, and eTL folder prefix:
+
+```bash
+snuetl directory bind /data/db/week-2 \
+  --name db-week-2 --course 306087 --semester 2026-2 \
+  --kind files --remote-folder "자료/Week 2"
+```
+
+The destination is an exact local mount point: the matched remote prefix is stripped.
+For example, binding remote `x` to local `A` places `x/notes.pdf` at
+`A/notes.pdf`; unmatched descendants remain, so `x/week-2/notes.pdf` becomes
+`A/week-2/notes.pdf`. This also permits nested rules such as `x -> A` and
+`x/week-2 -> A/B`.
+
+When rules overlap, snuetl deterministically chooses the most specific one: more
+course/semester/kind selectors first, then the longest remote-folder prefix, then the
+most recently defined equally specific rule. A remote-folder selector implies
+`--kind files`; folder selectors are rejected for articles, syllabi, or videos.
+
+User-created content can coexist inside every managed root. snuetl treats its SQLite
+records—not a directory scan—as ownership: an unrelated `A/D/assignment.txt` is never
+considered deleted just because `D` does not exist on eTL, and it is not moved or
+removed by route migration. If a first-time pull wants the exact path of an existing
+untracked file, the remote file receives a deterministic
+`__snuetl-<remote-id>` suffix instead of overwriting it. Do not repurpose a file already
+tracked by snuetl for local work, because a later remote revision may replace that tracked
+file; keep personal work in its own filename or subdirectory.
 
 Use `snuetl profile` to list and interactively switch eTL identities. Move with Up/Down,
 check one identity with Space, and press Enter to confirm. Use
@@ -297,9 +494,9 @@ Files are stored as:
 <download directory>/<semester>/<course name>--<course id>/files/<ETL folders>/<filename>
 ```
 
-Files tracked before 0.7 stay in their original locations until you explicitly run a
-`snuetl directory ... --move` migration. Logs deliberately omit query strings and
-redact common secret fields.
+Files tracked before 0.7 stay in their original locations until the next automatic
+`snuetl directory` migration. Logs deliberately omit query strings and redact common
+secret fields.
 
 The synchronizer first tries the authenticated Canvas-compatible API used by LearningX.
 If it is not exposed by the deployment, it falls back to semantic DOM selectors. It
@@ -342,17 +539,25 @@ snuetl uninstall --yes --json --no-input
 ```
 
 Destructive choices are explicit: `--delete-files` removes only paths tracked in the
-database under the configured managed root; `--purge-config`, `--purge-state`, or
-`--purge` remove private app data. `--remove-shared-deps` only considers Chromium or
-FFmpeg installations recorded as installed by the setup wizard. It never runs broad
-directory deletion or removes unrelated files.
+database under the configured default or routed roots; `--purge-config`,
+`--purge-state`, or `--purge` remove private app data. `--remove-shared-deps` only
+considers Chromium or FFmpeg installations recorded as installed by the setup wizard. It
+never runs broad directory deletion or removes unrelated files.
 
 ## Development
 
 ```bash
 python -m pip install -e '.[test]'
+ruff check .
+mypy
 pytest
 ```
+
+The browser-facing architecture is organized around typed boundaries: an authenticated
+LMS session owns locking and browser state, discovery coordinates Canvas API and DOM
+backends, and file synchronization is shared by `sync` and `pull files`. Provider-specific
+video resolution lives separately from pull orchestration. Keep new LMS parsing behind
+these boundaries and cover payload changes with redacted fixtures under `tests/fixtures`.
 
 Live account tests are intentionally not automatic. HTML/JSON fixtures should be redacted
 before committing, and traces must never be recorded on the SNU credential or verification

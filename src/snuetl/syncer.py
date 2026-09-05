@@ -1,156 +1,41 @@
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
+from collections.abc import Callable
 
-from .adapters import DiscoveryService
-from .browser import (
-    authenticated_entry_url,
-    ensure_authenticated_page,
-    open_authenticated_browser,
-    persist_auth_state,
-)
 from .config import Config, ensure_private_directory
 from .downloader import AuthenticatedDownloader
-from .errors import AuthenticationRequired
-from .logging_utils import redact
-from .models import Course, RemoteFile, SyncSummary
-from .paths import destination_path
-from .profile import profile_lock
+from .errors import AuthenticationRequired, OperationCancelled
+from .file_sync import desired_file_path, sync_file
+from .lms_session import AuthenticatedLmsSession
+from .models import SyncSummary
 from .state import StateStore
 
 LOGGER = logging.getLogger(__name__)
 
+# Retain the former private names for callers while the implementation lives in
+# the shared service module.
+_desired_path = desired_file_path
+_sync_file = sync_file
 
-def _desired_path(
+
+def synchronize(
     config: Config,
-    store: StateStore,
-    course: Course,
-    remote: RemoteFile,
-    current_path: Path | None,
-) -> Path:
-    # Existing tracked paths remain stable until `snuetl directory --move`
-    # performs an explicit, reviewed migration.
-    if current_path is not None:
-        return current_path
-
-    def claimed(candidate: Path) -> bool:
-        database_claim = store.path_claimed(
-            candidate, course_id=course.remote_id, remote_id=remote.remote_id
-        )
-        filesystem_claim = candidate.exists() and candidate != current_path
-        return database_claim or filesystem_claim
-
-    return destination_path(
-        config.download_dir,
-        course.name,
-        course.remote_id,
-        remote.folder_path,
-        remote.name,
-        remote.remote_id,
-        claimed,
-        semester_code=course.semester.semester_code if course.semester else None,
-        category="files",
-    )
-
-
-def _sync_file(
-    config: Config,
-    store: StateStore,
-    downloader: AuthenticatedDownloader,
-    course: Course,
-    remote: RemoteFile,
-    summary: SyncSummary,
-) -> None:
-    stored = store.get_file(course.remote_id, remote.remote_id)
-    current_path = Path(stored.local_path) if stored is not None else None
-    destination = _desired_path(config, store, course, remote, current_path)
-    unchanged = (
-        stored is not None
-        and stored.status == "ok"
-        and stored.revision == remote.revision
-        and current_path is not None
-        and current_path.is_file()
-    )
-    if unchanged:
-        if current_path != destination:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(current_path, destination)
-        with store.transaction():
-            store.record_file(
-                remote,
-                destination,
-                sha256=stored.sha256,
-                etag=stored.etag,
-                status="ok",
-            )
-        summary.unchanged += 1
-        LOGGER.info("course=%s path=%s action=unchanged", course.name, remote.display_path)
-        return
-
-    action = (
-        "updated"
-        if stored is not None and current_path is not None and current_path.exists()
-        else "downloaded"
-    )
-    try:
-        result = downloader.download(remote, destination)
-        with store.transaction():
-            store.record_file(
-                remote,
-                destination,
-                sha256=result.sha256,
-                etag=result.etag,
-                status="ok",
-            )
-        if current_path is not None and current_path != destination:
-            try:
-                current_path.unlink(missing_ok=True)
-            except OSError as exc:
-                LOGGER.warning(
-                    "course=%s path=%s downloaded the new location but could not remove "
-                    "the previous local path error=%s",
-                    course.name,
-                    remote.display_path,
-                    exc,
-                )
-        if action == "updated":
-            summary.updated += 1
-        else:
-            summary.downloaded += 1
-        LOGGER.info("course=%s path=%s action=%s", course.name, remote.display_path, action)
-    except AuthenticationRequired:
-        raise
-    except Exception as exc:
-        with store.transaction():
-            store.record_failure(remote, destination, redact(exc))
-        summary.failed += 1
-        LOGGER.error(
-            "course=%s path=%s action=failed error=%s",
-            course.name,
-            remote.display_path,
-            exc,
-        )
-
-
-def synchronize(config: Config, *, headless: bool | None = None) -> SyncSummary:
+    *,
+    headless: bool | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> SyncSummary:
     ensure_private_directory(config.state_dir)
     config.download_dir.mkdir(parents=True, exist_ok=True)
     summary = SyncSummary()
     run_id: int | None = None
-    with profile_lock(config.lock_path), StateStore(config.database_path) as store:
+    with StateStore(config.database_path) as store:
         run_id = store.begin_run()
         try:
-            effective_headless = config.headless if headless is None else headless
-            with open_authenticated_browser(config, headless=effective_headless) as (context, page):
-                page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-                ensure_authenticated_page(config, context, page)
-                landing_url = page.url
-                # Capture the session immediately so a later course-level failure
-                # cannot discard cookies refreshed while opening the LMS.
-                persist_auth_state(context, config, landing_url)
-                discovery = DiscoveryService(context, page, timeout_seconds=config.timeout_seconds)
+            with AuthenticatedLmsSession(config, headless=headless) as session:
+                context, page = session.context, session.page
+                assert session.discovery is not None
+                discovery = session.discovery
                 courses = [
                     course
                     for course in discovery.discover_courses()
@@ -172,14 +57,20 @@ def synchronize(config: Config, *, headless: bool | None = None) -> SyncSummary:
                     retry_count=config.retry_count,
                 ) as downloader:
                     for course in courses:
+                        if progress is not None:
+                            progress(f"Synchronizing {course.display_name}")
                         try:
                             files = discovery.discover_files(course)
                             catalog_file_count += len(files)
                             with store.transaction():
                                 store.replace_catalog_files(course, files)
                             for remote in files:
+                                if progress is not None:
+                                    progress(f"Checking {course.display_name}: {remote.name}")
                                 _sync_file(config, store, downloader, course, remote, summary)
                         except AuthenticationRequired:
+                            raise
+                        except OperationCancelled:
                             raise
                         except Exception as exc:
                             catalog_complete = False
@@ -191,7 +82,7 @@ def synchronize(config: Config, *, headless: bool | None = None) -> SyncSummary:
                     )
                 # DOM discovery may leave the page inside the final course. Keep
                 # the verified LMS landing URL as the stable entry point.
-                persist_auth_state(context, config, landing_url)
+                session.persist()
             status = "success" if summary.failed == 0 else "partial"
             store.finish_run(
                 run_id,

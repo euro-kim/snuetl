@@ -312,7 +312,7 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
     )
     download_dir = Path(download_answer).expanduser().resolve()
     download_dir.mkdir(parents=True, exist_ok=True)
-    config = replace(config, download_dir=download_dir, headless=True, setup_complete=False)
+    config = replace(config, download_dir=download_dir, setup_complete=False)
     save_config(config, path)
     console.print(f"[green]✓[/green] Configuration staged at [dim]{path}[/dim]")
 

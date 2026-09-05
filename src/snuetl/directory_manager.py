@@ -4,11 +4,14 @@ import hashlib
 import os
 import re
 import shutil
-from dataclasses import dataclass
+import sqlite3
+import uuid
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .config import Config
-from .paths import course_content_dir, destination_path
+from .config import Config, DirectoryRoute
+from .models import Course, Semester
+from .routing import routed_category_dir, routed_file_path
 from .state import StateStore
 
 
@@ -87,6 +90,68 @@ def validate_managed_root(path: Path) -> Path:
     return root
 
 
+def _stored_course(row: sqlite3.Row) -> Course:
+    semester_code = str(row["semester_code"] or "") or None
+    semester = Semester(semester_code, semester_code, semester_code) if semester_code else None
+    return Course(
+        str(row["course_id"]),
+        str(row["course_name"]),
+        "",
+        semester=semester,
+    )
+
+
+def resolve_cached_course_id(config: Config, selector: str | None) -> str | None:
+    if not selector or not config.database_path.exists():
+        return selector
+    with StateStore(config.database_path) as store:
+        rows = store.db.execute("SELECT remote_id, name FROM courses WHERE active=1").fetchall()
+    exact = [row for row in rows if str(row["remote_id"]) == selector]
+    if exact:
+        return str(exact[0]["remote_id"])
+    folded = selector.casefold()
+    matches = [row for row in rows if folded in str(row["name"]).casefold()]
+    if len(matches) == 1:
+        return str(matches[0]["remote_id"])
+    if len(matches) > 1:
+        raise ValueError("course selector is ambiguous; use an exact course ID")
+    return selector
+
+
+def upsert_directory_route(config: Config, route: DirectoryRoute) -> Config:
+    from .routing import validate_route
+
+    checked = validate_route(route)
+    if not checked.route_id:
+        checked = replace(checked, route_id=f"route-{uuid.uuid4().hex[:8]}")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", checked.route_id):
+        raise ValueError("route name may contain only letters, numbers, '.', '_', and '-'")
+    routes = [value for value in config.directory_routes if value.route_id != checked.route_id]
+    routes.append(checked)
+    return replace(config, directory_routes=tuple(routes))
+
+
+def remove_directory_route(config: Config, route_id: str) -> Config:
+    routes = tuple(route for route in config.directory_routes if route.route_id != route_id)
+    if len(routes) == len(config.directory_routes):
+        raise ValueError(f"unknown directory route: {route_id}")
+    return replace(config, directory_routes=routes)
+
+
+def directory_routes_data(config: Config) -> list[dict[str, object]]:
+    return [
+        {
+            "id": route.route_id,
+            "destination": str(route.destination),
+            "course_id": route.course_id,
+            "semester_code": route.semester_code,
+            "kind": route.kind,
+            "remote_folder": "/".join(route.remote_folder) or None,
+        }
+        for route in config.directory_routes
+    ]
+
+
 def plan_directory_migration(config: Config, new_root: Path) -> list[MigrationEntry]:
     root = validate_managed_root(new_root)
     if not config.database_path.exists():
@@ -105,19 +170,18 @@ def plan_directory_migration(config: Config, new_root: Path) -> list[MigrationEn
                WHERE f.local_path <> ''"""
         ).fetchall()
         for row in rows:
+            course = _stored_course(row)
             remote_path = str(row["remote_path"] or "")
             filename = str(row["file_name"] or Path(remote_path).name or row["remote_id"])
             folder = str(row["folder_path"] or "")
             folders = tuple(part for part in folder.split("/") if part)
-            destination = destination_path(
-                root,
-                str(row["course_name"]),
-                str(row["course_id"]),
+            destination = routed_file_path(
+                config,
+                course,
                 folders,
                 filename,
                 str(row["remote_id"]),
-                semester_code=str(row["semester_code"] or "") or None,
-                category="files",
+                default_root=root,
             )
             entries.append(
                 MigrationEntry(
@@ -137,6 +201,7 @@ def plan_directory_migration(config: Config, new_root: Path) -> list[MigrationEn
                WHERE a.local_path <> ''"""
         ).fetchall()
         for row in rows:
+            course = _stored_course(row)
             source = Path(str(row["local_path"]))
             artifact_type = str(row["artifact_type"])
             category = (
@@ -146,13 +211,9 @@ def plan_directory_migration(config: Config, new_root: Path) -> list[MigrationEn
                 if artifact_type.startswith("syllabus")
                 else "articles"
             )
-            destination = course_content_dir(
-                root,
-                str(row["course_name"]),
-                str(row["course_id"]),
-                str(row["semester_code"] or "") or None,
-                category,
-            ) / source.name
+            destination = (
+                routed_category_dir(config, course, category, default_root=root) / source.name
+            )
             entries.append(
                 MigrationEntry(
                     artifact_type,
@@ -176,6 +237,30 @@ def _digest(path: Path) -> str:
     return value.hexdigest()
 
 
+def directory_migration_conflicts(entries: list[MigrationEntry]) -> list[str]:
+    conflicts: list[str] = []
+    claimed: dict[Path, MigrationEntry] = {}
+    for entry in entries:
+        if entry.source == entry.destination or not entry.source.is_file():
+            continue
+        previous = claimed.get(entry.destination)
+        if previous is not None and previous.source != entry.source:
+            conflicts.append(f"multiple tracked files would target {entry.destination}")
+            continue
+        claimed[entry.destination] = entry
+        if entry.destination.exists():
+            try:
+                if not entry.destination.is_file() or _digest(entry.source) != _digest(
+                    entry.destination
+                ):
+                    conflicts.append(
+                        f"destination contains different user or tracked content: {entry.destination}"
+                    )
+            except OSError as exc:
+                conflicts.append(f"cannot compare {entry.destination}: {exc}")
+    return conflicts
+
+
 def execute_directory_migration(
     config: Config, entries: list[MigrationEntry], *, dry_run: bool = False
 ) -> MigrationSummary:
@@ -194,7 +279,9 @@ def execute_directory_migration(
                 entry.destination.parent.mkdir(parents=True, exist_ok=True)
                 if entry.destination.exists():
                     if _digest(entry.source) != _digest(entry.destination):
-                        raise OSError(f"destination already exists with different content: {entry.destination}")
+                        raise OSError(
+                            f"destination already exists with different content: {entry.destination}"
+                        )
                     with store.transaction():
                         if entry.record_type == "file":
                             store.db.execute(

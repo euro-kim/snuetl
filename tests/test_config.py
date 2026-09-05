@@ -3,7 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from snuetl.config import ConfigError, load_config, migrate_legacy_layout, save_config
+from snuetl.config import (
+    ConfigError,
+    DirectoryRoute,
+    load_config,
+    migrate_legacy_layout,
+    save_config,
+)
 
 
 def test_defaults_without_file(tmp_path: Path) -> None:
@@ -71,6 +77,32 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     assert loaded.browser_executable_path == Path("/usr/bin/chromium")
     assert loaded.setup_complete is True
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_directory_routes_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = load_config(tmp_path / "missing.toml")
+    route = DirectoryRoute(
+        route_id="week-two",
+        destination=tmp_path / "classes" / "week-2",
+        course_id="101",
+        semester_code="2026-2",
+        kind="files",
+        remote_folder=("자료", "Week 2"),
+    )
+    save_config(replace(original, directory_routes=(route,)), path)
+
+    assert load_config(path).directory_routes == (route,)
+
+
+def test_rejects_unconstrained_directory_route(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[[directory.routes]]\nid = "bad"\ndestination = "/tmp/target"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="must constrain"):
+        load_config(path)
 
 
 def test_migrates_legacy_config_and_state(tmp_path: Path, monkeypatch) -> None:

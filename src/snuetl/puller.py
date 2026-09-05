@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import hashlib
-import html
 import ipaddress
 import json
 import logging
 import os
 import re
 import socket
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit
 
+from . import media as _media
 from .browser import (
     authenticated_entry_url,
     ensure_authenticated_page,
@@ -23,23 +22,36 @@ from .browser import (
 from .catalog import inspect_catalog, select_courses
 from .config import Config
 from .downloader import AuthenticatedDownloader
+from .errors import OperationCancelled
+from .file_sync import sync_file
+from .lms_session import AuthenticatedLmsSession
 from .logging_utils import redact
+from .media import MEDIA_SUFFIXES
 from .models import ContentItem, Course, ModuleItem, RemoteFile, SyncSummary
-from .paths import course_content_dir, sanitize_component
+from .paths import sanitize_component
 from .profile import profile_lock
+from .routing import routed_category_dir
 from .state import StateStore
-from .syncer import _sync_file
 
 LOGGER = logging.getLogger(__name__)
 SYLLABUS_NAME = re.compile(r"syllabus|course[ _-]*outline|강의\s*계획(?:서)?", re.IGNORECASE)
-MEDIA_SUFFIXES = {".m3u8", ".mpd", ".mp4", ".webm", ".m4v"}
 MINIMUM_VIDEO_BYTES = 64 * 1024
-LEARNINGX_SESSION_COOKIES = {"xn_api_token", "laravel_session", "pni_token", "XSRF-TOKEN"}
-ATTENDANCE_ITEM = re.compile(r"lecture_attendance/items/view/(\d+)", re.IGNORECASE)
-CONTENT_ID = re.compile(
-    r"(?:var\s+content_id\s*=\s*['\"]|[?&]content_id=)([a-zA-Z0-9_-]+)",
-    re.IGNORECASE,
-)
+LEARNINGX_SESSION_COOKIES = _media.LEARNINGX_SESSION_COOKIES
+ATTENDANCE_ITEM = _media.ATTENDANCE_ITEM
+CONTENT_ID = _media.CONTENT_ID
+
+
+def _authenticated_session(config: Config) -> AuthenticatedLmsSession:
+    """Create a pull session through injectable compatibility entry points."""
+    return AuthenticatedLmsSession(
+        config,
+        headless=None,
+        persist_on_open=False,
+        profile_lock_factory=profile_lock,
+        browser_factory=open_authenticated_browser,
+        entry_url_factory=authenticated_entry_url,
+        authenticator=ensure_authenticated_page,
+    )
 
 
 @dataclass(slots=True)
@@ -124,21 +136,22 @@ def discover_pull_plan(
     *,
     course_selectors: tuple[str, ...] = (),
     semesters: tuple[str, ...] = (),
+    headless: bool | None = None,
 ) -> PullPlan:
-    course_result = inspect_catalog(config, kind="courses", headless=True)
+    course_result = inspect_catalog(config, kind="courses", headless=headless)
     courses = _selected_courses(course_result.courses, course_selectors, semesters)
     course_ids = {course.remote_id for course in courses}
     files: tuple[tuple[Course, RemoteFile], ...] = ()
     articles: tuple[tuple[Course, ContentItem], ...] = ()
     modules: tuple[tuple[Course, ModuleItem], ...] = ()
     if set(kinds) & {"files", "syllabus", "videos"}:
-        result = inspect_catalog(config, kind="files", headless=True)
+        result = inspect_catalog(config, kind="files", headless=headless)
         files = tuple(pair for pair in result.files if pair[0].remote_id in course_ids)
     if "articles" in kinds:
-        result = inspect_catalog(config, kind="articles", headless=True)
+        result = inspect_catalog(config, kind="articles", headless=headless)
         articles = tuple(pair for pair in result.items if pair[0].remote_id in course_ids)
     if "videos" in kinds:
-        result = inspect_catalog(config, kind="videos", headless=True)
+        result = inspect_catalog(config, kind="videos", headless=headless)
         modules = tuple(pair for pair in result.modules if pair[0].remote_id in course_ids)
     return PullPlan(kinds, courses, files, articles, modules)
 
@@ -198,6 +211,18 @@ def _atomic_write(path: Path, body: bytes) -> None:
     os.replace(temporary, path)
 
 
+def _unclaimed_path(destination: Path, source_id: str) -> Path:
+    suffix = sanitize_component(source_id, fallback="remote", limit=40)
+    candidate = destination.with_name(f"{destination.stem}__snuetl-{suffix}{destination.suffix}")
+    number = 2
+    while candidate.exists():
+        candidate = destination.with_name(
+            f"{destination.stem}__snuetl-{suffix}-{number}{destination.suffix}"
+        )
+        number += 1
+    return candidate
+
+
 def _managed_write(
     store: StateStore,
     summary: PullSummary,
@@ -213,6 +238,8 @@ def _managed_write(
     existing = store.get_artifact(artifact_type, course.remote_id, source_id)
     if existing is not None and existing["local_path"]:
         destination = Path(str(existing["local_path"]))
+    elif destination.exists():
+        destination = _unclaimed_path(destination, source_id)
     body_hash = _sha256_bytes(body)
     if existing is not None and destination.exists():
         local_hash = _sha256_file(destination)
@@ -336,7 +363,14 @@ def _download_article_assets(context: object, html: str, base_url: str, asset_di
 
 
 def _pull_articles(
-    config: Config, plan: PullPlan, summary: PullSummary, *, root: Path, force: bool, dry_run: bool
+    config: Config,
+    plan: PullPlan,
+    summary: PullSummary,
+    *,
+    root: Path,
+    force: bool,
+    dry_run: bool,
+    progress: Callable[[str], None] | None = None,
 ) -> None:
     if not plan.articles:
         return
@@ -345,21 +379,12 @@ def _pull_articles(
         return
     from markdownify import markdownify
 
-    with (
-        profile_lock(config.lock_path),
-        open_authenticated_browser(config, headless=True) as (context, page),
-        StateStore(config.database_path) as store,
-    ):
-        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-        ensure_authenticated_page(config, context, page)
+    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
+        context = session.context
         for course, item in plan.articles:
-            base = course_content_dir(
-                root,
-                course.display_name,
-                course.remote_id,
-                course.semester.semester_code if course.semester else None,
-                "articles",
-            )
+            if progress is not None:
+                progress(f"Writing {course.display_name}: {item.title}")
+            base = routed_category_dir(config, course, "articles", default_root=root)
             kind_dir = base / sanitize_component(item.kind)
             filename = f"{sanitize_component(item.title, limit=80)}--{sanitize_component(item.remote_id)}.md"
             html = item.body_html or ""
@@ -405,6 +430,10 @@ def _download_remote_artifact(
         summary.unchanged += 1
         summary.artifacts.append(str(existing["local_path"]))
         return Path(str(existing["local_path"]))
+    if existing is not None and existing["local_path"]:
+        destination = Path(str(existing["local_path"]))
+    elif destination.exists():
+        destination = _unclaimed_path(destination, remote.remote_id)
     result = downloader.download(remote, destination)
     store.record_artifact(
         artifact_type=artifact_type,
@@ -416,13 +445,22 @@ def _download_remote_artifact(
         size_bytes=result.size,
         status="ok",
     )
-    summary.created += 1
+    if existing is None:
+        summary.created += 1
+    else:
+        summary.updated += 1
     summary.artifacts.append(str(destination))
     return destination
 
 
 def _pull_files(
-    config: Config, plan: PullPlan, summary: PullSummary, *, root: Path, dry_run: bool
+    config: Config,
+    plan: PullPlan,
+    summary: PullSummary,
+    *,
+    root: Path,
+    dry_run: bool,
+    progress: Callable[[str], None] | None = None,
 ) -> None:
     if "files" not in plan.kinds:
         return
@@ -430,13 +468,8 @@ def _pull_files(
         summary.skipped += len(plan.files)
         return
     sync_summary = SyncSummary(courses=len(plan.courses))
-    with (
-        profile_lock(config.lock_path),
-        open_authenticated_browser(config, headless=True) as (context, page),
-        StateStore(config.database_path) as store,
-    ):
-        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-        ensure_authenticated_page(config, context, page)
+    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
+        context, page = session.context, session.page
         user_agent = page.evaluate("navigator.userAgent")
         with AuthenticatedDownloader(
             context,
@@ -446,7 +479,9 @@ def _pull_files(
         ) as downloader:
             pull_config = replace(config, download_dir=root)
             for course, remote in plan.files:
-                _sync_file(pull_config, store, downloader, course, remote, sync_summary)
+                if progress is not None:
+                    progress(f"Checking {course.display_name}: {remote.name}")
+                sync_file(pull_config, store, downloader, course, remote, sync_summary)
     summary.created += sync_summary.downloaded
     summary.updated += sync_summary.updated
     summary.unchanged += sync_summary.unchanged
@@ -454,7 +489,14 @@ def _pull_files(
 
 
 def _pull_syllabi(
-    config: Config, plan: PullPlan, summary: PullSummary, *, root: Path, force: bool, dry_run: bool
+    config: Config,
+    plan: PullPlan,
+    summary: PullSummary,
+    *,
+    root: Path,
+    force: bool,
+    dry_run: bool,
+    progress: Callable[[str], None] | None = None,
 ) -> None:
     if "syllabus" not in plan.kinds:
         return
@@ -467,13 +509,8 @@ def _pull_syllabi(
     syllabus_files: dict[str, list[RemoteFile]] = {}
     for course, remote in plan.syllabus_files:
         syllabus_files.setdefault(course.remote_id, []).append(remote)
-    with (
-        profile_lock(config.lock_path),
-        open_authenticated_browser(config, headless=True) as (context, page),
-        StateStore(config.database_path) as store,
-    ):
-        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-        ensure_authenticated_page(config, context, page)
+    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
+        context, page = session.context, session.page
         user_agent = page.evaluate("navigator.userAgent")
         with AuthenticatedDownloader(
             context,
@@ -482,13 +519,9 @@ def _pull_syllabi(
             retry_count=config.retry_count,
         ) as downloader:
             for course in plan.courses:
-                base = course_content_dir(
-                    root,
-                    course.display_name,
-                    course.remote_id,
-                    course.semester.semester_code if course.semester else None,
-                    "syllabus",
-                )
+                if progress is not None:
+                    progress(f"Writing syllabus for {course.display_name}")
+                base = routed_category_dir(config, course, "syllabus", default_root=root)
                 base.mkdir(parents=True, exist_ok=True)
                 source_html = course.syllabus_html or ""
                 source_url = f"{course.url.rstrip('/')}/assignments/syllabus"
@@ -568,6 +601,8 @@ def _pull_syllabi(
                 seen_hashes: dict[str, str] = {}
                 sources: list[dict[str, object]] = []
                 for remote in syllabus_files.get(course.remote_id, []):
+                    if progress is not None:
+                        progress(f"Checking syllabus file {course.display_name}: {remote.name}")
                     destination = base / sanitize_component(remote.name)
                     try:
                         with store.transaction():
@@ -611,6 +646,8 @@ def _pull_syllabi(
                                     "deduplicated": False,
                                 }
                             )
+                    except OperationCancelled:
+                        raise
                     except Exception as exc:
                         summary.failed += 1
                         sources.append({"file_id": remote.remote_id, "error": str(exc)})
@@ -635,216 +672,17 @@ def _pull_syllabi(
                     )
 
 
-def _write_cookie_file(context: object, state_dir: Path) -> Path:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix="snuetl-cookies-",
-        suffix=".txt",
-        dir=state_dir,
-        delete=False,
-    ) as handle:
-        path = Path(handle.name)
-        handle.write("# Netscape HTTP Cookie File\n")
-        for cookie in context.cookies():
-            domain = str(cookie.get("domain") or "")
-            include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
-            secure = "TRUE" if cookie.get("secure") else "FALSE"
-            expires = int(float(cookie.get("expires") or 0))
-            name = str(cookie.get("name") or "").replace("\t", "")
-            value = str(cookie.get("value") or "").replace("\t", "")
-            handle.write(
-                "\t".join(
-                    (
-                        domain,
-                        include_subdomains,
-                        str(cookie.get("path") or "/"),
-                        secure,
-                        str(max(expires, 0)),
-                        name,
-                        value,
-                    )
-                )
-                + "\n"
-            )
-    path.chmod(0o600)
-    return path
-
-
-def _referer_for(url: str, fallback: str) -> str:
-    host = (urlsplit(url).hostname or "").casefold()
-    if host == "lcms.snu.ac.kr" or host.endswith(".naverncp.com"):
-        return "https://lcms.snu.ac.kr/"
-    return fallback
-
-
-def _append_media_candidate(candidates: list[tuple[str, str]], url: object, referer: str) -> None:
-    value = str(url or "").strip()
-    parts = urlsplit(value)
-    if parts.scheme not in {"http", "https"} or not parts.netloc:
-        return
-    if (parts.hostname or "").casefold() == "lcms.snu.ac.kr" and parts.path.casefold().endswith(
-        "/viewer/uniplayer/preloader.mp4"
-    ):
-        return
-    candidate = (value, _referer_for(value, referer))
-    if candidate not in candidates:
-        candidates.append(candidate)
-
-
-def _is_lcms_lecture_url(url: object) -> bool:
-    host = (urlsplit(str(url or "")).hostname or "").casefold()
-    return host == "edge.naverncp.com" or host.endswith(".edge.naverncp.com")
-
-
-def _activate_lcms_player(page: object, *, timeout_ms: int = 15_000) -> bool:
-    """Start UniPlayer so it replaces its tiny preloader with the lecture URL."""
-    clicked = False
-    for frame in page.frames:
-        if (urlsplit(str(frame.url or "")).hostname or "").casefold() != "lcms.snu.ac.kr":
-            continue
-        try:
-            controls = frame.locator(".vc-front-screen-play-btn")
-            for index in range(controls.count()):
-                control = controls.nth(index)
-                if not control.is_visible():
-                    continue
-                control.click(force=True, timeout=5_000)
-                clicked = True
-                break
-        except Exception:
-            continue
-        if clicked:
-            break
-    if not clicked:
-        return False
-
-    elapsed = 0
-    while elapsed < timeout_ms:
-        for frame in page.frames:
-            try:
-                values = frame.locator("video.vc-vplay-video1").evaluate_all(
-                    "nodes => nodes.map(node => node.currentSrc || node.src || '')"
-                )
-                if any(_is_lcms_lecture_url(value) for value in values):
-                    return True
-            except Exception:
-                pass
-        page.wait_for_timeout(500)
-        elapsed += 500
-    return False
-
-
-def _dom_media_candidates(page: object) -> tuple[list[tuple[str, str]], list[str]]:
-    """Read progressive/HLS URLs and CMS IDs from every loaded LTI frame."""
-    candidates: list[tuple[str, str]] = []
-    content_ids: list[str] = []
-    for frame in page.frames:
-        frame_url = str(frame.url or "")
-        parts = urlsplit(frame_url)
-        referer = (
-            f"{parts.scheme}://{parts.netloc}/"
-            if parts.scheme in {"http", "https"} and parts.netloc
-            else "https://lcms.snu.ac.kr/"
-        )
-        try:
-            lcms_frame = (parts.hostname or "").casefold() == "lcms.snu.ac.kr"
-            selector = "video.vc-vplay-video1" if lcms_frame else "video, video source"
-            values = frame.locator(selector).evaluate_all(
-                """
-                nodes => nodes.flatMap(node => [
-                  node.currentSrc || '', node.src || '', node.getAttribute('src') || ''
-                ]).filter(Boolean)
-                """
-            )
-            for value in values:
-                if lcms_frame and not _is_lcms_lecture_url(value):
-                    continue
-                _append_media_candidate(candidates, value, referer)
-        except Exception:
-            pass
-        try:
-            source = frame.content()
-        except Exception:
-            source = ""
-        for match in CONTENT_ID.finditer(source):
-            if match.group(1) not in content_ids:
-                content_ids.append(match.group(1))
-    return candidates, content_ids
-
-
-def _learningx_content_id(context: object, course: Course, item: ModuleItem) -> str | None:
-    match = ATTENDANCE_ITEM.search(item.external_url or "")
-    if match is None:
-        return None
-    try:
-        token = next(
-            (
-                str(cookie.get("value") or "")
-                for cookie in context.cookies()
-                if cookie.get("name") == "xn_api_token" and cookie.get("value")
-            ),
-            None,
-        )
-        if not token:
-            return None
-        origin = f"{urlsplit(course.url).scheme}://{urlsplit(course.url).netloc}"
-        response = context.request.get(
-            f"{origin}/learningx/api/v1/courses/{quote(course.remote_id, safe='')}"
-            f"/attendance_items/{quote(match.group(1), safe='')}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=20_000,
-        )
-        if response.status != 200:
-            return None
-        payload = response.json()
-        content_id = (payload.get("item_content_data") or {}).get("content_id")
-        return str(content_id) if content_id else None
-    except Exception:
-        return None
-
-
-def _cms_media_candidate(context: object, content_id: str) -> tuple[str, str] | None:
-    """Resolve the SNU LCMS player metadata to its progressive MP4 URL."""
-    try:
-        response = context.request.get(
-            "https://lcms.snu.ac.kr/viewer/ssplayer/uniplayer_support/content.php"
-            f"?content_id={quote(content_id, safe='')}",
-            headers={"Referer": "https://lcms.snu.ac.kr/"},
-            timeout=20_000,
-        )
-        if response.status != 200:
-            return None
-        body = html.unescape(response.text())
-        match = re.search(
-            r'method=["\']progressive["\'][^>]*>([^<]+)\[MEDIA_FILE\]',
-            body,
-            re.IGNORECASE,
-        )
-        if match is None:
-            return None
-        return urljoin(str(response.url), match.group(1).strip() + "screen.mp4"), (
-            "https://lcms.snu.ac.kr/"
-        )
-    except Exception:
-        return None
-
-
-def _clear_stale_learningx_cookies(context: object) -> None:
-    """Force the next Canvas LTI launch to mint a current LearningX token."""
-    try:
-        present = {
-            str(cookie.get("name") or "")
-            for cookie in context.cookies()
-            if cookie.get("name") in LEARNINGX_SESSION_COOKIES
-        }
-        for name in present:
-            context.clear_cookies(name=name)
-    except Exception:
-        # Older Playwright releases may not support filtered clearing. Keeping
-        # the existing cookies is safer than clearing the authenticated session.
-        pass
+# Compatibility façade: the established private import points remain available,
+# while execution is delegated to the provider-focused media module.
+_write_cookie_file = _media.write_cookie_file
+_referer_for = _media.referer_for
+_append_media_candidate = _media.append_media_candidate
+_is_lcms_lecture_url = _media.is_lcms_lecture_url
+_activate_lcms_player = _media.activate_lcms_player
+_dom_media_candidates = _media.dom_media_candidates
+_learningx_content_id = _media.learningx_content_id
+_cms_media_candidate = _media.cms_media_candidate
+_clear_stale_learningx_cookies = _media.clear_stale_learningx_cookies
 
 
 def _pull_videos(
@@ -875,13 +713,8 @@ def _pull_videos(
     if progress is not None:
         progress(f"Preparing {video_count} selected video{'s' if video_count != 1 else ''}...")
 
-    with (
-        profile_lock(config.lock_path),
-        open_authenticated_browser(config, headless=True) as (context, page),
-        StateStore(config.database_path) as store,
-    ):
-        page.goto(authenticated_entry_url(config), wait_until="domcontentloaded")
-        ensure_authenticated_page(config, context, page)
+    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
+        context, page = session.context, session.page
         _clear_stale_learningx_cookies(context)
         cookie_file: Path | None = None
         try:
@@ -893,13 +726,7 @@ def _pull_videos(
                 retry_count=config.retry_count,
             ) as downloader:
                 for course, remote in plan.uploaded_media:
-                    base = course_content_dir(
-                        root,
-                        course.display_name,
-                        course.remote_id,
-                        course.semester.semester_code if course.semester else None,
-                        "videos",
-                    )
+                    base = routed_category_dir(config, course, "videos", default_root=root)
                     try:
                         if progress is not None:
                             progress(f"Downloading {course.display_name}: {remote.name}")
@@ -913,6 +740,8 @@ def _pull_videos(
                                 remote=remote,
                                 destination=base / sanitize_component(remote.name),
                             )
+                    except OperationCancelled:
+                        raise
                     except Exception as exc:
                         summary.failed += 1
                         summary.warnings.append(
@@ -944,17 +773,13 @@ def _pull_videos(
                     continue
                 if progress is not None:
                     progress(f"Resolving {course.display_name}: {item.title}")
-                base = course_content_dir(
-                    root,
-                    course.display_name,
-                    course.remote_id,
-                    course.semester.semester_code if course.semester else None,
-                    "videos",
-                )
+                base = routed_category_dir(config, course, "videos", default_root=root)
                 stem = f"{sanitize_component(item.module_name, limit=50)}--{sanitize_component(item.title, limit=80)}--{sanitize_component(item.remote_id)}"
                 base.mkdir(parents=True, exist_ok=True)
                 revision = urlsplit(item.html_url or item.external_url or item.remote_id).path
                 existing = store.get_artifact("video", course.remote_id, item.remote_id)
+                if existing is None and any(base.glob(f"{stem}.*")):
+                    stem += f"__snuetl-{sanitize_component(item.remote_id, limit=30)}"
                 invalid_existing = False
                 if (
                     existing is not None
@@ -1014,6 +839,8 @@ def _pull_videos(
                             _append_media_candidate(candidates, frame.url, page_referer)
                         _append_media_candidate(candidates, page.url, launch_url)
                         _append_media_candidate(candidates, launch_url, launch_url)
+                    except OperationCancelled:
+                        raise
                     except Exception as exc:
                         summary.failed += 1
                         summary.warnings.append(
@@ -1115,6 +942,8 @@ def _pull_videos(
                             )
                         error = None
                         break
+                    except OperationCancelled:
+                        raise
                     except Exception as exc:
                         error = exc
                 if error is not None or media is None:
@@ -1177,9 +1006,25 @@ def execute_pull(
 ) -> PullSummary:
     destination = (root or config.download_dir).expanduser().resolve()
     summary = PullSummary(courses=len(plan.courses))
-    _pull_files(config, plan, summary, root=destination, dry_run=dry_run)
-    _pull_articles(config, plan, summary, root=destination, force=force, dry_run=dry_run)
-    _pull_syllabi(config, plan, summary, root=destination, force=force, dry_run=dry_run)
+    _pull_files(config, plan, summary, root=destination, dry_run=dry_run, progress=progress)
+    _pull_articles(
+        config,
+        plan,
+        summary,
+        root=destination,
+        force=force,
+        dry_run=dry_run,
+        progress=progress,
+    )
+    _pull_syllabi(
+        config,
+        plan,
+        summary,
+        root=destination,
+        force=force,
+        dry_run=dry_run,
+        progress=progress,
+    )
     _pull_videos(
         config,
         plan,
