@@ -1,25 +1,79 @@
 # snuetl
 
-`snuetl` downloads files from the Files area of every active SNU eTL course. It
-uses a dedicated Chromium profile so SNU's trusted-browser setting survives between
-runs. Setup can save the ID and password for automatic re-login; one-time verification
-codes are never stored.
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> This is an unofficial personal automation. Use it only for courses and materials
-> your account is authorized to access, and avoid aggressive polling.
+**snuetl** is a self-hosted Linux command-line application for synchronizing authorized
+course content from Seoul National University's eTL platform. It downloads course files,
+articles, syllabi, and videos; maintains a queryable local catalog; and can be operated
+interactively, by systemd, or through a private Discord bot.
 
-## Install and first run
+Authentication runs in a dedicated Chromium profile so the trusted-browser session can
+survive between runs. Saved passwords are optional, one-time verification codes are never
+stored, and unattended commands fail closed when renewed verification is required.
 
-Python 3.11 or newer is required. From a checkout, one script installs pipx when needed,
-installs the command with all dependencies, and starts setup:
+> [!IMPORTANT]
+> This is an unofficial personal automation project and is not affiliated with or endorsed
+> by Seoul National University. Use it only for courses and materials your account is
+> authorized to access. Follow SNU policies and avoid aggressive polling.
+
+## Highlights
+
+- Guided installation, browser provisioning, and SNU authentication.
+- Incremental, collision-safe synchronization with preservation of local edits.
+- Complete paginated catalogs exposed through tables, JSON, CSV, and read-only SQLite SQL.
+- Files, articles, pages, assignments, quizzes, syllabi, and authenticated video support.
+- Headless x86-64 and ARM64 operation, including 64-bit Raspberry Pi OS.
+- Optional hardened systemd user timer for unattended synchronization.
+- Optional private Discord control with owner, server, and channel allowlists.
+- Stable `--json --no-input` contract and documented exit codes for automation.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Authentication and secrets](#authentication-and-secrets)
+- [Local storage](#local-storage)
+- [Multiple users on one Linux server](#multiple-users-on-one-linux-server)
+- [Command reference](#command-reference)
+- [Discord remote control](#discord-remote-control)
+- [SQL catalog](#sql-catalog)
+- [Pull course content](#pull-course-content)
+- [Agent and script interface](#agent-and-script-interface)
+- [Synchronize files](#synchronize-files)
+- [Production deployment](#production-deployment)
+- [Uninstall](#uninstall)
+- [Development](#development)
+- [License](#license)
+
+## Requirements
+
+| Component | Requirement |
+| --- | --- |
+| Operating system | 64-bit Linux (x86-64 or ARM64) |
+| Python | 3.11 or newer |
+| Browser | Playwright Chromium, Google Chrome, or system Chromium on Raspberry Pi OS |
+| Service manager | systemd user services, only for scheduled or Discord operation |
+| Account | An authorized SNU eTL account |
+
+Desktop operation is not required. Setup detects display availability and uses headless
+Chromium on servers. The browser installation step may request `sudo` to install required
+operating-system packages; the application itself runs as an unprivileged user.
+
+## Quick start
+
+Clone the repository, then run the guided installer:
 
 ```bash
+git clone https://github.com/euro-kim/snuetl.git
+cd snuetl
 ./setup.sh
 ```
 
-Agents and unattended installers can use `./setup.sh --install-only`, then call the stable
-`snuetl ... --json --no-input` interface. The traditional
-`pipx install --include-deps .` command remains supported.
+The script installs pipx when needed, installs the command and its dependencies, and
+starts setup. Agents and unattended installers can use `./setup.sh --install-only`, then
+call the stable `snuetl ... --json --no-input` interface. Direct installation with
+`pipx install --include-deps .` is also supported.
 
 Running bare `snuetl` on a fresh machine opens a guided terminal setup. It:
 
@@ -70,10 +124,10 @@ snuetl doctor
 
 Setup prompts before invoking `sudo` for operating-system packages. Python packages and
 the appropriate Playwright browser are installed automatically. A 64-bit Raspberry Pi
-OS image is required; 32-bit `armv7l` is not supported. Native x86-64 and ARM64 browser
-smoke tests are defined in `.github/workflows/ci.yml`.
+OS image is required; 32-bit `armv7l` is not supported. Run `snuetl doctor` on the
+target machine to validate its browser installation.
 
-## Authentication
+## Authentication and secrets
 
 Enrollment must run on the same machine that will perform synchronization:
 
@@ -172,7 +226,7 @@ export or copy selected files to a separately managed shared directory with an
 appropriate Unix group; do not point multiple deployments at the same writable download
 root or share their state directories.
 
-## Commands
+## Command reference
 
 Bare `snuetl` displays current local status and the command menu after onboarding.
 
@@ -588,10 +642,28 @@ The synchronizer first tries the authenticated Canvas-compatible API used by Lea
 If it is not exposed by the deployment, it falls back to semantic DOM selectors. It
 never uses fixed screen coordinates.
 
-## Automatic synchronization
+## Production deployment
 
-Setup deliberately does not prompt to automate synchronization. To opt in, install the
-static systemd user-unit templates manually:
+Run each deployment as a dedicated, unprivileged Linux user. Keep the checkout, config,
+state, and download roots owned by that user; never run `snuetl` or its browser with
+`sudo`. Before enabling automation, complete enrollment and prove that one manual sync
+succeeds:
+
+```bash
+./setup.sh --install-only
+snuetl setup --headless
+snuetl doctor
+snuetl sync
+```
+
+Review every warning from `snuetl doctor` before continuing. In particular, confirm that
+the configured directories are private, the selected browser launches, authentication is
+valid, and the download volume has enough free space.
+
+### Scheduled synchronization
+
+Setup deliberately does not enable a schedule. To opt in, install the version-controlled
+systemd user-unit templates:
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -601,13 +673,58 @@ systemctl --user enable --now snuetl.timer
 systemctl --user list-timers snuetl.timer
 ```
 
-Inspect runs with:
+The supplied service is a `Type=oneshot` user unit with a restrictive umask and systemd
+hardening directives. It expects the pipx executable at `~/.local/bin/snuetl`; update
+`ExecStart` in the installed copy if pipx uses a different binary directory. To keep the
+user manager and timer running after logout, an administrator must enable lingering:
 
 ```bash
-journalctl --user -u snuetl.service
+sudo loginctl enable-linger "$USER"
 ```
 
-If the timer reports exit code `2`, run `snuetl login` again.
+### Operations
+
+Use these checks for routine monitoring and incident diagnosis:
+
+```bash
+systemctl --user status snuetl.timer
+systemctl --user status snuetl.service
+journalctl --user -u snuetl.service --since today
+snuetl status
+snuetl doctor
+```
+
+An exit code of `2` means authentication must be renewed with `snuetl login`. Exit code
+`3` indicates invalid configuration or local state; run `snuetl doctor` for the precise
+remediation. A partial result exits with code `4` and should be inspected in the service
+journal before the next scheduled run.
+
+For a local-checkout installation, deploy a reviewed revision and rebuild the pipx
+environment with:
+
+```bash
+git pull --ff-only
+snuetl update
+snuetl doctor
+systemctl --user start snuetl.service
+```
+
+The timer does not need to be re-enabled after an application update. If the unit files
+changed, copy them again and run `systemctl --user daemon-reload` before the final service
+start.
+
+### Backup and recovery
+
+Back up the download root and, if catalog history matters, the configuration and state
+directories listed above. Treat state backups as secrets: they can contain the saved SNU
+password, Discord token, authenticated browser cookies, and local catalog. Encrypt backups,
+restrict access, and stop the timer and Discord service before taking a consistent snapshot.
+
+Do not restore a trusted-browser profile onto a different host as a substitute for
+enrollment. On a replacement machine, restore only the required data, run `snuetl setup`
+and `snuetl login` locally, then validate the deployment with `snuetl doctor` and a manual
+sync before enabling the timer.
+
 `snuetl logout` removes the dedicated trusted-browser profile and the saved credential
 file. It leaves downloaded files, configuration, and synchronization history untouched.
 
@@ -648,3 +765,16 @@ these boundaries and cover payload changes with redacted fixtures under `tests/f
 Live account tests are intentionally not automatic. HTML/JSON fixtures should be redacted
 before committing, and traces must never be recorded on the SNU credential or verification
 screens.
+
+This repository does not ship a hosted GitHub Actions workflow. Run the complete local
+quality gate before opening a change:
+
+```bash
+ruff check .
+mypy
+pytest
+```
+
+## License
+
+Distributed under the [MIT License](LICENSE).
