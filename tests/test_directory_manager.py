@@ -106,30 +106,72 @@ def test_directory_bind_automatically_migrates_only_tracked_files(tmp_path: Path
         assert store.get_file("101", "f1").local_path == str(target / "notes.pdf")
 
 
-def test_directory_permissions_are_audited_and_normalized(tmp_path: Path) -> None:
+def test_usable_shared_directory_permissions_are_preserved(tmp_path: Path) -> None:
     root = tmp_path / "shared"
     root.mkdir(mode=0o755)
     root.chmod(0o755)
 
-    unsafe = directory_permission_report(root)
-    assert unsafe.safe is False
-    assert unsafe.mode == 0o755
-    assert "group or other users have access" in " ".join(unsafe.issues)
-    assert "chmod 700" in " ".join(unsafe.remediation)
+    existing = directory_permission_report(root)
+    assert existing.safe is True
+    assert existing.mode == 0o755
+    assert existing.issues == ()
 
     secured = secure_managed_directory(root)
     assert secured.safe is True
-    assert secured.changed is True
+    assert secured.changed is False
     assert secured.previous_mode == 0o755
-    assert stat.S_IMODE(root.stat().st_mode) == 0o700
-    assert directory_permission_data(secured)["mode"] == "0700"
+    assert stat.S_IMODE(root.stat().st_mode) == 0o755
+    assert directory_permission_data(secured)["mode"] == "0755"
+
+
+def test_secure_managed_directory_does_not_chmod_an_already_safe_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda _path, mode: chmod_calls.append(mode))
+
+    report = secure_managed_directory(root)
+
+    assert report.safe is True
+    assert report.changed is False
+    assert chmod_calls == []
+
+
+def test_secure_managed_directory_does_not_chmod_a_new_private_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "new-private"
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda _path, mode: chmod_calls.append(mode))
+
+    report = secure_managed_directory(root)
+
+    assert report.safe is True
+    assert report.changed is True
+    assert root.stat().st_mode & 0o777 == 0o700
+    assert chmod_calls == []
+
+
+def test_managed_directory_adds_only_missing_owner_access(tmp_path: Path) -> None:
+    root = tmp_path / "read-only"
+    root.mkdir(mode=0o555)
+    root.chmod(0o555)
+
+    report = secure_managed_directory(root)
+
+    assert report.safe is True
+    assert report.changed is True
+    assert report.previous_mode == 0o555
+    assert stat.S_IMODE(root.stat().st_mode) == 0o755
 
 
 def test_directory_list_warns_without_changing_unsafe_permissions(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "config.toml"
     root = tmp_path / "shared"
-    root.mkdir(mode=0o755)
-    root.chmod(0o755)
+    root.mkdir(mode=0o555)
+    root.chmod(0o555)
     config = replace(load_config(tmp_path / "missing.toml"), download_dir=root)
     save_config(config, config_path)
 
@@ -137,19 +179,20 @@ def test_directory_list_warns_without_changing_unsafe_permissions(tmp_path: Path
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["data"]["permissions_safe"] is False
-    assert payload["data"]["permissions"][0]["mode"] == "0755"
+    assert payload["data"]["permissions"][0]["mode"] == "0555"
     assert payload["warnings"][0]["code"] == "UNSAFE_DIRECTORY_PERMISSIONS"
-    assert stat.S_IMODE(root.stat().st_mode) == 0o755
+    assert stat.S_IMODE(root.stat().st_mode) == 0o555
 
 
-def test_directory_set_secures_existing_destination_and_reports_change(
+def test_directory_set_preserves_existing_usable_permissions(
     tmp_path: Path, capsys
 ) -> None:
     config_path = tmp_path / "config.toml"
     target = tmp_path / "target"
     target.mkdir(mode=0o755)
     target.chmod(0o755)
-    save_config(load_config(tmp_path / "missing.toml"), config_path)
+    config = replace(load_config(tmp_path / "missing.toml"), state_dir=tmp_path / "state")
+    save_config(config, config_path)
 
     result = main(
         [
@@ -166,9 +209,9 @@ def test_directory_set_secures_existing_destination_and_reports_change(
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["data"]["permissions_safe"] is True
-    assert payload["data"]["permissions"][0]["changed"] is True
+    assert payload["data"]["permissions"][0]["changed"] is False
     assert payload["data"]["permissions"][0]["previous_mode"] == "0755"
-    assert stat.S_IMODE(target.stat().st_mode) == 0o700
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
 
 
 def test_dedicated_video_directory_can_be_set_and_reset(tmp_path: Path, capsys) -> None:

@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import default_config_path, ensure_private_directory, load_config, save_config
-from .directory_manager import set_video_directory
+from .directory_manager import secure_managed_directory, set_video_directory
 from .discord_config import load_discord_token
 from .runtime import (
     container_reload_path,
@@ -44,8 +44,9 @@ def bootstrap_container_config(config_path: Path | None = None) -> Path:
         config = set_video_directory(config, _VIDEO_DIR)
         save_config(config, path)
     config = load_config(path)
-    for directory in (config.state_dir, config.download_dir, _VIDEO_DIR):
-        ensure_private_directory(directory)
+    ensure_private_directory(config.state_dir)
+    for directory in (config.download_dir, _VIDEO_DIR):
+        secure_managed_directory(directory)
     return path
 
 

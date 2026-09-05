@@ -561,7 +561,7 @@ def _print_directory_permissions(reports: list[DirectoryPermissionReport]) -> No
     for report in reports:
         mode = f"{report.mode:04o}" if report.mode is not None else "missing"
         if report.safe:
-            verb = "Secured" if report.changed else "Safe permissions"
+            verb = "Prepared" if report.changed else "Usable permissions"
             previous = (
                 f" (changed from {report.previous_mode:04o})"
                 if report.changed and report.previous_mode is not None

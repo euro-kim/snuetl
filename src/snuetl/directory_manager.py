@@ -116,7 +116,7 @@ def validate_managed_root(path: Path) -> Path:
 
 
 def directory_permission_report(path: Path) -> DirectoryPermissionReport:
-    """Audit whether a managed root is private and usable by this process."""
+    """Audit whether a managed content root is usable by this process."""
     root = validate_managed_root(path)
     current_uid = os.geteuid() if hasattr(os, "geteuid") else None
     if not root.exists():
@@ -149,19 +149,17 @@ def directory_permission_report(path: Path) -> DirectoryPermissionReport:
     if not is_directory:
         issues.append("path exists but is not a directory")
         remediation.append("Choose a directory path instead of a file.")
-    if not owned:
+    if not owned and not (readable and writable and searchable):
         issues.append(
             f"directory is owned by UID {details.st_uid}, not the current UID {current_uid}"
         )
         remediation.append(
             f"Choose a directory you own or run: sudo chown {current_uid}:{os.getegid()} -- {quoted}"
         )
-    if mode & 0o077:
-        issues.append(f"group or other users have access (mode {mode:04o})")
-        remediation.append(f"Remove shared access with: chmod 700 -- {quoted}")
-    if mode & 0o700 != 0o700:
+    if owned and mode & 0o700 != 0o700:
+        usable_mode = mode | 0o700
         issues.append(f"the owner lacks read, write, or search permission (mode {mode:04o})")
-        remediation.append(f"Restore owner access with: chmod 700 -- {quoted}")
+        remediation.append(f"Restore owner access with: chmod {usable_mode:04o} -- {quoted}")
     if not readable:
         issues.append("directory is not readable by snuetl")
     if not writable:
@@ -187,29 +185,34 @@ def directory_permission_report(path: Path) -> DirectoryPermissionReport:
 
 
 def secure_managed_directory(path: Path) -> DirectoryPermissionReport:
-    """Create or normalize one explicitly configured managed root to mode 0700."""
+    """Create a content root or minimally repair access needed by this process."""
     root = validate_managed_root(path)
     before = directory_permission_report(root)
     if before.exists and not before.is_directory:
         raise PermissionError(f"managed path is not a directory: {root}")
-    if before.exists and not before.owned_by_current_user:
+    if before.exists and not before.safe and not before.owned_by_current_user:
         remediation = before.remediation[0] if before.remediation else "Choose a directory you own."
         raise PermissionError(
-            f"cannot secure managed directory {root}: {'; '.join(before.issues)}. {remediation}"
+            f"cannot make managed directory usable {root}: {'; '.join(before.issues)}. "
+            f"{remediation}"
         )
     try:
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        root.chmod(0o700)
+        details = root.stat()
+        current_uid = os.geteuid() if hasattr(os, "geteuid") else None
+        mode = stat.S_IMODE(details.st_mode)
+        if details.st_uid == current_uid and mode & 0o700 != 0o700:
+            root.chmod(mode | 0o700)
     except OSError as exc:
         raise PermissionError(
-            f"cannot create or secure managed directory {root}: {exc}. "
+            f"cannot create or prepare managed directory {root}: {exc}. "
             "Choose an owner-writable directory and try again."
         ) from exc
     after = directory_permission_report(root)
     if not after.safe:
-        guidance = " ".join(after.remediation) or "Choose an owner-only directory."
+        guidance = " ".join(after.remediation) or "Choose a usable directory."
         raise PermissionError(
-            f"managed directory permissions are still unsafe for {root}: "
+            f"managed directory is still unusable for {root}: "
             f"{'; '.join(after.issues)}. {guidance}"
         )
     return replace(
@@ -253,7 +256,8 @@ def configured_directory_permission_reports(
     blockers = [
         report
         for report in reports
-        if report.exists and (not report.is_directory or not report.owned_by_current_user)
+        if report.exists
+        and (not report.is_directory or (not report.safe and not report.owned_by_current_user))
     ]
     if blockers:
         detail = " | ".join(
@@ -261,7 +265,7 @@ def configured_directory_permission_reports(
             for report in blockers
         )
         raise PermissionError(
-            "cannot secure configured directories without changing any permissions: " + detail
+            "cannot prepare configured directories without changing ownership: " + detail
         )
     return [secure_managed_directory(path) for path in unique]
 

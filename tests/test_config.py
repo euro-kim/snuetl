@@ -6,10 +6,44 @@ import pytest
 from snuetl.config import (
     ConfigError,
     DirectoryRoute,
+    ensure_private_directory,
     load_config,
     migrate_legacy_layout,
     save_config,
 )
+
+
+def test_private_directory_does_not_chmod_an_already_private_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "private"
+    path.mkdir(mode=0o700)
+    chmod_calls: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda _path, mode: chmod_calls.append(mode))
+
+    ensure_private_directory(path)
+
+    assert chmod_calls == []
+
+
+def test_private_directory_tightens_permissions_only_when_needed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "shared"
+    path.mkdir(mode=0o755)
+    chmod_calls: list[int] = []
+    original_chmod = Path.chmod
+
+    def record_chmod(target: Path, mode: int) -> None:
+        chmod_calls.append(mode)
+        original_chmod(target, mode)
+
+    monkeypatch.setattr(Path, "chmod", record_chmod)
+
+    ensure_private_directory(path)
+
+    assert chmod_calls == [0o700]
+    assert path.stat().st_mode & 0o777 == 0o700
 
 
 def test_defaults_without_file(tmp_path: Path) -> None:

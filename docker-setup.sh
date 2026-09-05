@@ -320,16 +320,17 @@ done
 ensure_host_directory() {
     local key="$1"
     local path="$2"
-    local owner_uid owner_gid mode mismatch probe
+    local private="$3"
+    local owner_uid owner_gid mode mode_value access_bits new_mode mismatch probe
 
     if [[ -e "$path" && ! -d "$path" ]]; then
         die "${key} points to a non-directory: ${path}"
     fi
     if [[ ! -d "$path" ]]; then
         log "Creating ${path}."
-        if ! mkdir -p -- "$path" 2>/dev/null; then
+        if ! mkdir -p -m 0700 -- "$path" 2>/dev/null; then
             log "Elevated permission is required to create ${path}."
-            if ! run_privileged mkdir -p -- "$path"; then
+            if ! run_privileged mkdir -p -m 0700 -- "$path"; then
                 die "could not create ${path}"
             fi
         fi
@@ -337,36 +338,79 @@ ensure_host_directory() {
 
     owner_uid="$(stat -c '%u' -- "$path")"
     owner_gid="$(stat -c '%g' -- "$path")"
-    mismatch=""
-    if [[ "$owner_uid" != "$HOST_UID" || "$owner_gid" != "$HOST_GID" ]]; then
-        mismatch="$path"
-    elif ! mismatch="$(
-        find "$path" -xdev \( ! -uid "$HOST_UID" -o ! -gid "$HOST_GID" \) -print -quit 2>/dev/null
-    )"; then
-        mismatch="$path"
-    fi
-    if [[ -n "$mismatch" ]]; then
-        log "Ownership under ${path} does not match ${HOST_UID}:${HOST_GID}; repairing it recursively."
-        if ! run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"; then
-            die "could not repair ownership under ${path}"
-        fi
-    fi
-
     mode="$(stat -c '%a' -- "$path")"
-    if [[ "$mode" != 700 ]]; then
-        log "Permissions on ${path} are ${mode}; changing them to 700."
-        if ! chmod 0700 -- "$path" 2>/dev/null; then
-            if ! run_privileged chmod 0700 -- "$path"; then
-                die "could not set mode 700 on ${path}; check filesystem mount options"
+
+    if "$private"; then
+        mismatch=""
+        if [[ "$owner_uid" != "$HOST_UID" || "$owner_gid" != "$HOST_GID" ]]; then
+            mismatch="$path"
+        elif ! mismatch="$(
+            find "$path" -xdev \( ! -uid "$HOST_UID" -o ! -gid "$HOST_GID" \) -print -quit \
+                2>/dev/null
+        )"; then
+            mismatch="$path"
+        fi
+        if [[ -n "$mismatch" ]]; then
+            log "Private data under ${path} does not match ${HOST_UID}:${HOST_GID}; repairing ownership recursively."
+            if ! run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"; then
+                die "could not repair ownership under ${path}"
             fi
         fi
-    fi
 
-    owner_uid="$(stat -c '%u' -- "$path")"
-    owner_gid="$(stat -c '%g' -- "$path")"
-    mode="$(stat -c '%a' -- "$path")"
-    [[ "$owner_uid" == "$HOST_UID" && "$owner_gid" == "$HOST_GID" && "$mode" == 700 ]] || \
-        die "could not enforce owner ${HOST_UID}:${HOST_GID} and mode 700 on ${path}; check filesystem mount options"
+        if [[ "$mode" != 700 ]]; then
+            log "Private directory ${path} has mode ${mode}; changing it to 700."
+            if ! chmod 0700 -- "$path" 2>/dev/null; then
+                if ! run_privileged chmod 0700 -- "$path"; then
+                    die "could not set mode 700 on ${path}; check filesystem mount options"
+                fi
+            fi
+        fi
+
+        owner_uid="$(stat -c '%u' -- "$path")"
+        owner_gid="$(stat -c '%g' -- "$path")"
+        mode="$(stat -c '%a' -- "$path")"
+        [[ "$owner_uid" == "$HOST_UID" && "$owner_gid" == "$HOST_GID" && "$mode" == 700 ]] || \
+            die "could not enforce owner ${HOST_UID}:${HOST_GID} and mode 700 on ${path}; check filesystem mount options"
+    else
+        mode_value=$((8#$mode))
+        if [[ "$owner_uid" == "$HOST_UID" ]]; then
+            access_bits=$(((mode_value >> 6) & 7))
+            new_mode=$((mode_value | 0700))
+        elif [[ "$owner_gid" == "$HOST_GID" ]]; then
+            access_bits=$(((mode_value >> 3) & 7))
+            new_mode=$((mode_value | 0070))
+        else
+            access_bits=$((mode_value & 7))
+            new_mode=$((mode_value | 0700))
+        fi
+        if ((EUID != 0)) && [[ -r "$path" && -w "$path" && -x "$path" ]]; then
+            # Preserve ACL-based access even when the traditional mode bits do not show it.
+            access_bits=7
+        fi
+
+        if ((access_bits != 7)); then
+            if [[ "$owner_uid" != "$HOST_UID" && "$owner_gid" != "$HOST_GID" ]]; then
+                log "${path} is not usable through its current owner or group; changing ownership to ${HOST_UID}:${HOST_GID}."
+                if ! run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"; then
+                    die "could not repair ownership under ${path}"
+                fi
+                new_mode=$((mode_value | 0700))
+            fi
+            if ((new_mode != mode_value)); then
+                printf -v new_mode '%04o' "$new_mode"
+                log "${path} lacks required read/write/traverse access; changing mode ${mode} to ${new_mode}."
+                if ! chmod "$new_mode" -- "$path" 2>/dev/null; then
+                    if ! run_privileged chmod "$new_mode" -- "$path"; then
+                        die "could not make ${path} usable; check filesystem mount options"
+                    fi
+                fi
+            else
+                log "The ownership correction makes ${path} usable; preserving mode ${mode}."
+            fi
+        else
+            log "${path} is already usable with owner ${owner_uid}:${owner_gid} and mode ${mode}; preserving both."
+        fi
+    fi
 
     probe="${path}/.snuetl-write-check.$$"
     if ! (umask 077 && : >"$probe") 2>/dev/null; then
@@ -376,7 +420,13 @@ ensure_host_directory() {
 }
 
 for index in "${!DIRECTORY_KEYS[@]}"; do
-    ensure_host_directory "${DIRECTORY_KEYS[$index]}" "${HOST_PATHS[$index]}"
+    private=false
+    case "${DIRECTORY_KEYS[$index]}" in
+        SNUETL_CONFIG_DIR|SNUETL_STATE_DIR)
+            private=true
+            ;;
+    esac
+    ensure_host_directory "${DIRECTORY_KEYS[$index]}" "${HOST_PATHS[$index]}" "$private"
 done
 
 compose() {

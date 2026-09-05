@@ -133,8 +133,10 @@ The script provides the complete host-side deployment workflow:
 - copies `.env.example` to `.env` only when `.env` does not already exist;
 - pauses while you review the container name, timezone, and persistent host paths;
 - corrects `SNUETL_UID` and `SNUETL_GID` to match the invoking login user;
-- safely creates each configured directory, repairing ownership with `sudo` only when
-  necessary and enforcing owner-only mode `0700`;
+- safely creates each configured directory and repairs ownership with `sudo` only when
+  access would otherwise fail;
+- keeps configuration and state owner-private at `0700`, while preserving existing usable
+  permissions such as `0755` or `0750` on download and video directories;
 - stops a previous Compose attempt without deleting bind-mounted data;
 - rebuilds with the latest base image and no stale build cache;
 - recreates the named container in detached mode and waits for a healthy supervisor.
@@ -190,6 +192,13 @@ it rebuilds for possible UID/GID changes and recreates the container while prese
 ```bash
 ./docker-setup.sh
 ```
+
+Configuration and state contain reusable credentials and therefore require matching
+ownership and mode `0700`. Download and video roots are content storage: existing ownership
+and modes are left unchanged whenever the container UID or GID already has read, write, and
+traverse access. If access is incomplete, the script adds only the missing owner or group
+bits; it changes ownership only when neither the configured UID nor GID can use the path.
+New content directories start at the conservative mode `0700`, which you may broaden later.
 
 ### Terminal and operations
 
@@ -703,16 +712,19 @@ course into one directory. Existing tracked videos migrate automatically when se
 rerun or `snuetl directory videos PATH` is applied; `--dry-run` previews the move and
 `--no-migrate` changes only future placement.
 
-Managed roots are private by default. Guided setup and successful `directory set`,
-`directory videos`, or `directory bind` operations create each configured root with
-owner-only mode `0700`, or
-tighten an owner-controlled existing root to `0700`. The response reports the current
-mode, ownership, read/write/search access, and whether permissions changed. A read-only
-`snuetl directory` or `--dry-run` audit never changes permissions; unsafe paths produce
-an `UNSAFE_DIRECTORY_PERMISSIONS` warning with an exact `chmod 700` or ownership remedy.
-If a path is owned by someone else, is a file, is not writable, or is on a filesystem
-that cannot enforce the safe mode, setup stops instead of saving an unusable or exposed
-destination. `snuetl doctor` audits the default root and every binding as well.
+Managed content roots are private by default when newly created, but usable existing modes
+are preserved. Guided setup and successful `directory set`, `directory videos`, or
+`directory bind` operations require read, write, and traverse access; `0755`, `0750`, and
+group-managed modes therefore remain unchanged when they already grant the running user the
+required access. If an owner-controlled path lacks access, snuetl adds only the missing
+owner bits without removing existing group or other bits. The response reports mode,
+ownership, read/write/search access, and whether anything changed. A read-only `snuetl
+directory` or `--dry-run` audit never changes permissions; unusable paths produce an
+`UNSAFE_DIRECTORY_PERMISSIONS` warning with an exact minimal permission or ownership
+remedy. A path owned by someone else is accepted when it is already usable; otherwise setup
+stops and asks the operator to repair ownership. `snuetl doctor` audits the default root and
+every binding as well. Configuration and state directories are intentionally excluded from
+this relaxed content policy and remain owner-only at `0700`.
 
 A binding can match any combination of cached course ID or unique title, canonical
 semester, content kind, and eTL folder prefix:

@@ -24,6 +24,10 @@ def test_bootstrap_uses_fixed_internal_paths_and_preserves_existing_config(
     config_path = home / ".config" / "snuetl" / "config.toml"
     downloads = tmp_path / "data" / "downloads"
     videos = tmp_path / "data" / "videos"
+    downloads.mkdir(parents=True, mode=0o755)
+    downloads.chmod(0o755)
+    videos.mkdir(parents=True, mode=0o755)
+    videos.chmod(0o755)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(container_runtime, "_DOWNLOAD_DIR", downloads)
     monkeypatch.setattr(container_runtime, "_VIDEO_DIR", videos)
@@ -36,7 +40,9 @@ def test_bootstrap_uses_fixed_internal_paths_and_preserves_existing_config(
     assert configured.setup_complete is False
     assert configured.directory_routes[0].destination == videos
     assert configured.directory_routes[0].kind == "videos"
-    assert stat.S_IMODE(configured.download_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(configured.state_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(configured.download_dir.stat().st_mode) == 0o755
+    assert stat.S_IMODE(videos.stat().st_mode) == 0o755
 
     save_config(replace(configured, download_dir=tmp_path / "custom"), config_path)
     container_runtime.bootstrap_container_config(config_path)

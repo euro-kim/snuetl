@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -276,8 +277,7 @@ def load_config(path: Path | None = None) -> Config:
 
 def save_config(config: Config, path: Path | None = None) -> Path:
     config_path = path or default_config_path()
-    config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    config_path.parent.chmod(0o700)
+    ensure_private_directory(config_path.parent)
 
     def quoted(value: object) -> str:
         return json.dumps(str(value), ensure_ascii=False)
@@ -350,4 +350,5 @@ def migrate_legacy_layout() -> bool:
 
 def ensure_private_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.chmod(0o700)
+    if stat.S_IMODE(path.stat().st_mode) != 0o700:
+        path.chmod(0o700)

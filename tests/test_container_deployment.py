@@ -97,6 +97,11 @@ fi
     )
     fake_docker.chmod(0o755)
 
+    for name in ("downloads", "videos"):
+        directory = project / "docker-data" / name
+        directory.mkdir(parents=True)
+        directory.chmod(0o755)
+
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
     environment["FAKE_DOCKER_LOG"] = str(docker_log)
@@ -119,9 +124,12 @@ fi
     }
     assert values["SNUETL_UID"] == str(os.getuid())
     assert values["SNUETL_GID"] == str(os.getgid())
-    for name in ("config", "state", "downloads", "videos"):
+    for name in ("config", "state"):
         directory = project / "docker-data" / name
         assert directory.stat().st_mode & 0o777 == 0o700
+    for name in ("downloads", "videos"):
+        directory = project / "docker-data" / name
+        assert directory.stat().st_mode & 0o777 == 0o755
 
     commands = docker_log.read_text(encoding="utf-8")
     assert "down --remove-orphans" in commands

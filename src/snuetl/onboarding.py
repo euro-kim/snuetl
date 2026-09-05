@@ -342,13 +342,13 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
                 else ""
             )
             console.print(
-                f"[green]✓[/green] Secured storage directory{previous} to owner-only mode "
+                f"[green]✓[/green] Prepared storage directory{previous} with usable mode "
                 f"[green]{mode}[/green]: [dim]{permissions.path}[/dim]"
             )
         else:
             console.print(
-                f"[green]✓[/green] Storage permissions are safe "
-                f"([green]{mode}[/green], owner-only): [dim]{permissions.path}[/dim]"
+                f"[green]✓[/green] Storage permissions are usable "
+                f"([green]{mode}[/green], preserved): [dim]{permissions.path}[/dim]"
             )
     migration_entries = plan_directory_migration(config, config.download_dir)
     migration_conflicts = directory_migration_conflicts(migration_entries)
