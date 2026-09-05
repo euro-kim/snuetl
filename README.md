@@ -137,8 +137,9 @@ The script provides the complete host-side deployment workflow:
   access would otherwise fail;
 - keeps configuration and state owner-private at `0700`, while preserving existing usable
   permissions such as `0755` or `0750` on download and video directories;
-- stops a previous Compose attempt without deleting bind-mounted data;
-- rebuilds with the latest base image and no stale build cache;
+- rebuilds with the latest base image and no stale build cache before stopping the current
+  container;
+- replaces a previous Compose attempt without deleting bind-mounted data;
 - recreates the named container in detached mode and waits for a healthy supervisor.
 
 The repository ignores `.env` and the default `docker-data/` tree. Run the script as your
@@ -223,14 +224,34 @@ An `unhealthy` container means the supervisor heartbeat stopped. A healthy conta
 still be waiting for initial setup or Discord pairing; use `snuetl doctor` and
 `snuetl discord status` to inspect application readiness.
 
-To deploy a reviewed source update, rebuild the immutable image rather than running
-`snuetl update` inside the container:
+### Updating a Docker deployment
+
+The package is baked into the read-only image, so do not run `snuetl update` through
+`docker compose exec`. Update the host checkout and container with the dedicated script:
 
 ```bash
-git pull --ff-only
-./docker-setup.sh
-docker compose exec snuetl snuetl doctor
+./docker-update.sh
 ```
+
+The updater verifies that the checkout is clean and on `main`, fetches `origin/main`, shows
+the incoming commits, and asks before applying them. It only permits a fast-forward update;
+it never resets local history or overwrites local changes. After updating the checkout it
+delegates path checks, a fresh no-cache image build, detached container recreation, log
+reporting, and health verification to `docker-setup.sh`. The new image is built before the
+current container is stopped, so a build failure leaves the running deployment untouched.
+All four bind-mounted data directories are preserved.
+
+For unattended operation after reviewing the remote and for rebuilding an instance that
+already has the current source revision:
+
+```bash
+./docker-update.sh --yes
+./docker-update.sh --force-rebuild
+```
+
+`--yes` skips only the Git-update confirmation. `--force-rebuild` is useful when another
+Compose instance already pulled the shared checkout, or when an image must be recreated
+without a new commit. The normal no-update case exits without an unnecessary image build.
 
 For a consistent backup, stop the container and copy the four host directories from
 `.env`, encrypting the config/state backup because it contains reusable credentials,
@@ -250,6 +271,12 @@ cp .env.example .env.alice
 ./docker-setup.sh --env-file .env.alice --project-name snuetl-alice
 docker compose --env-file .env.alice -p snuetl-alice exec snuetl \
   snuetl setup --headless
+```
+
+Update that specific instance with the same environment and project identity:
+
+```bash
+./docker-update.sh --env-file .env.alice --project-name snuetl-alice
 ```
 
 Never share a config directory, state directory, or writable download root between

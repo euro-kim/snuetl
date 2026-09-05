@@ -54,8 +54,169 @@ def test_docker_setup_script_owns_the_complete_bootstrap_workflow() -> None:
     assert "compose down --remove-orphans" in script
     assert "compose build --pull --no-cache snuetl" in script
     assert "compose up -d --force-recreate --remove-orphans snuetl" in script
+    assert script.index("compose build --pull --no-cache snuetl") < script.index(
+        "compose down --remove-orphans"
+    )
     assert "docker system prune" not in script
     assert "compose down -v" not in script
+
+
+def test_docker_update_script_guards_and_explains_the_update_lifecycle() -> None:
+    script_path = ROOT / "docker-update.sh"
+    script = script_path.read_text(encoding="utf-8")
+
+    assert script_path.stat().st_mode & 0o111
+    assert "status --porcelain --untracked-files=normal" in script
+    assert 'fetch --prune "$REMOTE_NAME" "$DEPLOY_BRANCH"' in script
+    assert 'merge-base --is-ancestor "$local_revision" "$remote_revision"' in script
+    assert 'merge --ff-only "$remote_revision"' in script
+    assert 'git -C "$SCRIPT_DIR" reset' not in script
+    assert 'setup_arguments=(--yes --env-file "$ENV_FILE")' in script
+    assert "--force-rebuild" in script
+    assert "Revision changed" in script
+
+
+def test_docker_update_script_fast_forwards_and_delegates_rebuild(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
+    (project / ".env").touch()
+
+    setup_log = tmp_path / "setup.log"
+    fake_setup = project / "docker-setup.sh"
+    fake_setup.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$*" >"$FAKE_SETUP_LOG"
+printf 'fake setup completed\\n'
+""",
+        encoding="utf-8",
+    )
+    fake_setup.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git_log = tmp_path / "git.log"
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env bash
+set -eu
+arguments=("$@")
+if [[ "${arguments[0]}" == -C ]]; then
+    arguments=("${arguments[@]:2}")
+fi
+command="${arguments[*]}"
+printf '%s\\n' "$command" >>"$FAKE_GIT_LOG"
+case "$command" in
+    'rev-parse --show-toplevel') printf '%s\\n' "$FAKE_PROJECT" ;;
+    'symbolic-ref --quiet --short HEAD') printf 'main\\n' ;;
+    'status --porcelain --untracked-files=normal') ;;
+    'remote get-url origin') printf 'git@example.test:snuetl.git\\n' ;;
+    'rev-parse HEAD') printf '%s\\n' "$FAKE_LOCAL_REVISION" ;;
+    'rev-parse FETCH_HEAD') printf '%s\\n' "$FAKE_REMOTE_REVISION" ;;
+    'log --oneline --no-decorate '*) printf '2222222 feat: update image\\n' ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+
+    local_revision = "1" * 40
+    remote_revision = "2" * 40
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "FAKE_GIT_LOG": str(git_log),
+            "FAKE_SETUP_LOG": str(setup_log),
+            "FAKE_PROJECT": str(project),
+            "FAKE_LOCAL_REVISION": local_revision,
+            "FAKE_REMOTE_REVISION": remote_revision,
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(project / "docker-update.sh"),
+            "--yes",
+            "--project-name",
+            "snuetl-test",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Incoming commits" in result.stdout
+    assert f"Revision changed: {local_revision} -> {remote_revision}" in result.stdout
+    assert "--yes --env-file" in setup_log.read_text(encoding="utf-8")
+    assert "--project-name snuetl-test" in setup_log.read_text(encoding="utf-8")
+    commands = git_log.read_text(encoding="utf-8")
+    assert "fetch --prune origin main" in commands
+    assert f"merge-base --is-ancestor {local_revision} {remote_revision}" in commands
+    assert f"merge --ff-only {remote_revision}" in commands
+
+
+def test_docker_update_script_skips_rebuild_when_source_is_current(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
+    (project / ".env").touch()
+    setup_marker = tmp_path / "setup-was-called"
+    fake_setup = project / "docker-setup.sh"
+    fake_setup.write_text(
+        "#!/usr/bin/env bash\ntouch \"$FAKE_SETUP_MARKER\"\n",
+        encoding="utf-8",
+    )
+    fake_setup.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env bash
+set -eu
+arguments=("$@")
+if [[ "${arguments[0]}" == -C ]]; then arguments=("${arguments[@]:2}"); fi
+case "${arguments[*]}" in
+    'rev-parse --show-toplevel') printf '%s\\n' "$FAKE_PROJECT" ;;
+    'symbolic-ref --quiet --short HEAD') printf 'main\\n' ;;
+    'status --porcelain --untracked-files=normal') ;;
+    'remote get-url origin') printf 'git@example.test:snuetl.git\\n' ;;
+    'rev-parse HEAD'|'rev-parse FETCH_HEAD') printf '%s\\n' "$FAKE_REVISION" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "FAKE_PROJECT": str(project),
+            "FAKE_REVISION": "3" * 40,
+            "FAKE_SETUP_MARKER": str(setup_marker),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(project / "docker-update.sh"), "--yes"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "No rebuild is necessary" in result.stdout
+    assert not setup_marker.exists()
 
 
 def test_docker_setup_script_prepares_storage_and_starts_a_fresh_image(

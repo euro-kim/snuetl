@@ -454,17 +454,18 @@ compose() {
 log "Validating the rendered Compose configuration."
 compose config --quiet
 
-log "Stopping and removing any previous Compose attempt; persistent host data is preserved."
-compose down --remove-orphans
-
+managed_container="$(compose ps --all -q snuetl)"
 existing_container="$(
     "${DOCKER_COMMAND[@]}" ps -aq --filter "name=^/${container_name}$" 2>/dev/null || true
 )"
-[[ -z "$existing_container" ]] || \
+[[ -z "$existing_container" || "$existing_container" == "$managed_container" ]] || \
     die "container name ${container_name} is already used outside this Compose project; rename it in ${ENV_FILE} or remove that container explicitly"
 
 log "Building a fresh image with the current UID/GID and latest base image."
 compose build --pull --no-cache snuetl
+
+log "Replacing the previous Compose container; persistent host data is preserved."
+compose down --remove-orphans
 
 log "Starting ${container_name} in detached mode."
 compose up -d --force-recreate --remove-orphans snuetl

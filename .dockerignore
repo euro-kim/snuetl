@@ -13,3 +13,4 @@ build
 dist
 tests
 docker-setup.sh
+docker-update.sh
