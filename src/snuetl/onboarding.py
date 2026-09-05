@@ -15,10 +15,19 @@ from .browser import _playwright, interactive_login
 from .catalog import inspect_catalog
 from .config import Config, default_config_path, load_config, save_config
 from .credentials import SavedCredentials, load_credentials, save_credentials
+from .directory_manager import (
+    configured_directory_permission_reports,
+    configured_video_directory,
+    directory_migration_conflicts,
+    execute_directory_migration,
+    has_separate_video_directory,
+    plan_directory_migration,
+    set_video_directory,
+)
 from .errors import AuthenticationRequired
 from .profile import profile_lock
 from .provenance import record_apt_package, record_playwright_browser
-from .scheduler import timer_is_enabled
+from .scheduler import discord_service_is_enabled, install_discord_service, timer_is_enabled
 from .ui import (
     choose_checkbox,
     console,
@@ -308,13 +317,63 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
 
     console.rule("[bold]2. Storage")
     download_answer = Prompt.ask(
-        "Where should course files be stored?", default=str(config.download_dir)
+        "Where should regular course files be stored?", default=str(config.download_dir)
     )
     download_dir = Path(download_answer).expanduser().resolve()
-    download_dir.mkdir(parents=True, exist_ok=True)
     config = replace(config, download_dir=download_dir, setup_complete=False)
+    video_default = (
+        configured_video_directory(config) if has_separate_video_directory(config) else download_dir
+    )
+    video_answer = Prompt.ask(
+        "Where should large video downloads be stored? "
+        "(Use the regular course directory to keep them together)",
+        default=str(video_default),
+    )
+    video_dir = Path(video_answer).expanduser().resolve()
+    config = set_video_directory(config, video_dir)
+    permission_reports = configured_directory_permission_reports(config, secure=True)
+    for permissions in permission_reports:
+        mode = f"{permissions.mode:04o}" if permissions.mode is not None else "unknown"
+        if permissions.changed:
+            previous = (
+                f" from {permissions.previous_mode:04o}"
+                if permissions.previous_mode is not None
+                else ""
+            )
+            console.print(
+                f"[green]✓[/green] Secured storage directory{previous} to owner-only mode "
+                f"[green]{mode}[/green]: [dim]{permissions.path}[/dim]"
+            )
+        else:
+            console.print(
+                f"[green]✓[/green] Storage permissions are safe "
+                f"([green]{mode}[/green], owner-only): [dim]{permissions.path}[/dim]"
+            )
+    migration_entries = plan_directory_migration(config, config.download_dir)
+    migration_conflicts = directory_migration_conflicts(migration_entries)
+    if migration_conflicts:
+        raise ValueError(
+            "storage setup stopped before moving anything: " + "; ".join(migration_conflicts)
+        )
+    migration = execute_directory_migration(config, migration_entries)
     save_config(config, path)
+    if config.discord.enabled and platform.system() == "Linux" and discord_service_is_enabled():
+        install_discord_service(
+            path,
+            state_dir=config.state_dir,
+            download_dir=config.download_dir,
+            write_dirs=tuple(route.destination for route in config.directory_routes),
+        )
     console.print(f"[green]✓[/green] Configuration staged at [dim]{path}[/dim]")
+    if migration.moved:
+        console.print(
+            f"[green]✓[/green] Moved {migration.moved} tracked item(s) into the new storage layout"
+        )
+    if migration.failed:
+        raise RuntimeError(
+            f"{migration.failed} tracked item(s) could not be migrated; configuration and "
+            "successful moves were saved. Run 'snuetl directory --dry-run' for details."
+        )
 
     if force_headless is None:
         login_headless = not display_available()
@@ -370,6 +429,18 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
     auth_ready = config.profile_dir.exists() and config.auth_state_path.exists()
     checks.append(("Authentication state", auth_ready, str(config.state_dir)))
     checks.append(("Download directory", config.download_dir.exists(), str(config.download_dir)))
+    permission_reports = configured_directory_permission_reports(config)
+    permissions_ok = all(report.safe for report in permission_reports)
+    permission_detail = (
+        ", ".join(f"{report.path} ({report.mode:04o})" for report in permission_reports)
+        if permissions_ok
+        else " | ".join(
+            f"{report.path}: {'; '.join((*report.issues, *report.remediation))}"
+            for report in permission_reports
+            if not report.safe
+        )
+    )
+    checks.append(("Managed directory permissions", permissions_ok, permission_detail))
     core_check_count = len(checks)
     saved = load_credentials(config)
     checks.append(

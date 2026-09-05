@@ -80,7 +80,16 @@ class _Request:
             return _Response([{"url": "syllabus", "title": "Syllabus", "updated_at": "2026-08-20"}])
         if "/assignments?" in url:
             return _Response(
-                [{"id": 9, "name": "Homework 1", "due_at": "2026-09-10", "html_url": "/x/9"}]
+                [
+                    {"id": 9, "name": "Homework 1", "due_at": "2026-09-10", "html_url": "/x/9"},
+                    {
+                        "id": 10,
+                        "name": "Week 1 Quiz",
+                        "due_at": "2026-09-11",
+                        "html_url": "/courses/101/quizzes/10",
+                        "is_quiz_assignment": True,
+                    },
+                ]
             )
         raise AssertionError(url)
 
@@ -99,4 +108,8 @@ def test_canvas_article_and_assignment_titles() -> None:
         ("page", "Syllabus"),
     ]
     assert assignments[0].title == "Homework 1"
+    assert [(item.kind, item.title) for item in assignments] == [
+        ("assignment", "Homework 1"),
+        ("quiz", "Week 1 Quiz"),
+    ]
     assert assignments[0].due_at == "2026-09-10"

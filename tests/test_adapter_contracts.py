@@ -66,4 +66,8 @@ def test_canvas_fixture_maps_every_catalog_entity_to_domain_models() -> None:
         ("page", "Overview"),
     ]
     assert adapter.discover_assignments(course)[0].due_at == "2026-09-10T00:00:00Z"
+    assert [(item.kind, item.title) for item in adapter.discover_assignments(course)] == [
+        ("assignment", "Homework 1"),
+        ("quiz", "Week 1 Quiz"),
+    ]
     assert adapter.discover_modules(course)[0].title == "Lecture"

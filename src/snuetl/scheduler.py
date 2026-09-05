@@ -17,7 +17,7 @@ def install_user_timer(config_path: Path, *, interval_minutes: int = 15) -> Path
         raise RuntimeError("systemctl is not available on this machine")
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
-    executable = Path(sys.executable).resolve()
+    executable = Path(sys.executable).absolute()
     command = " ".join(
         (
             _systemd_quote(str(executable)),
@@ -40,7 +40,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectKernelTunables=true
-ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
@@ -105,7 +104,7 @@ def install_discord_service(
         raise RuntimeError("systemctl is not available on this machine")
     path = discord_service_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    executable = Path(sys.executable).resolve()
+    executable = Path(sys.executable).absolute()
     command = " ".join(
         (
             _systemd_quote(str(executable)),
@@ -141,7 +140,6 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths={write_paths}
 ProtectKernelTunables=true
-ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
@@ -162,6 +160,18 @@ def discord_service_is_enabled() -> bool:
         return False
     result = subprocess.run(
         ["systemctl", "--user", "is-enabled", DISCORD_SERVICE_NAME],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def discord_service_is_active() -> bool:
+    if shutil.which("systemctl") is None:
+        return False
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", "--quiet", DISCORD_SERVICE_NAME],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,

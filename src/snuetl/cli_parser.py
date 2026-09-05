@@ -150,14 +150,20 @@ def build_parser() -> argparse.ArgumentParser:
     add_agent_flags(profile)
 
     directory = subparsers.add_parser(
-        "directory", help="show or configure pull roots and routing rules"
+        "directory", help="audit or securely configure pull roots and routing rules"
     )
     directory.add_argument(
         "operation",
         nargs="?",
-        help="a new default path, or one of: set, list, bind, unbind",
+        help="a new default path, or one of: set, videos, list, bind, unbind",
     )
     directory.add_argument("value", nargs="?", help="path or route name for the selected operation")
+    directory.add_argument(
+        "--default",
+        dest="use_default",
+        action="store_true",
+        help="with 'videos', store videos under the regular course root",
+    )
     directory.add_argument("--name", help="stable name for a binding (existing names are replaced)")
     directory.add_argument("--course", help="limit a binding to a cached course ID or unique title")
     directory.add_argument("--semester", help="limit a binding to a canonical semester code")
@@ -188,6 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("files", "list files without downloading them"),
         ("articles", "list announcement and course-page titles"),
         ("assignments", "list assignment titles and due dates"),
+        ("quizzes", "list quiz titles and due dates"),
     ):
         command = subparsers.add_parser(name, help=description)
         if name != "courses":

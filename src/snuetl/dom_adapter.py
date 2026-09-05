@@ -150,9 +150,9 @@ class DomAdapter:
 
     def discover_assignments(self, course: Course) -> list[ContentItem]:
         self.page.goto(f"{course.url.rstrip('/')}/assignments", wait_until="domcontentloaded")
-        anchors = self.page.locator("a[href*='/assignments/']")
-        found: dict[str, ContentItem] = {}
-        pattern = re.compile(r"/assignments/([^/?#]+)")
+        anchors = self.page.locator("a[href*='/assignments/'], a[href*='/quizzes/']")
+        found: dict[tuple[str, str], ContentItem] = {}
+        pattern = re.compile(r"/(assignments|quizzes)/([^/?#]+)")
         for index in range(anchors.count()):
             anchor = anchors.nth(index)
             try:
@@ -161,13 +161,14 @@ class DomAdapter:
                 title = (anchor.inner_text() or anchor.get_attribute("title") or "").strip()
                 if not match or not title:
                     continue
-                remote_id = match.group(1)
+                kind = "quiz" if match.group(1) == "quizzes" else "assignment"
+                remote_id = match.group(2)
                 found.setdefault(
-                    remote_id,
+                    (kind, remote_id),
                     ContentItem(
                         remote_id,
                         course.remote_id,
-                        "assignment",
+                        kind,
                         title,
                         urljoin(f"{self.origin}/", href),
                     ),

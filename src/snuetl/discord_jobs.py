@@ -10,7 +10,7 @@ from typing import Any
 from .config import Config
 from .discord_operations import LoginCallbacks, execute_job
 from .errors import OperationCancelled
-from .logging_utils import redact
+from .logging_utils import redact, redacted_exc_info
 from .state import DiscordJob, StateStore
 
 LOGGER = logging.getLogger(__name__)
@@ -103,7 +103,13 @@ class DiscordJobQueue:
                 future: Future[None] = asyncio.run_coroutine_threadsafe(
                     self.on_progress(current, str(redact(message))), loop
                 )
-                future.add_done_callback(lambda completed: completed.exception())
+
+                def report_publish_error(completed: Future[None]) -> None:
+                    error = completed.exception()
+                    if error is not None:
+                        LOGGER.error("Could not publish Discord job progress: %s", redact(error))
+
+                future.add_done_callback(report_publish_error)
 
             try:
                 callbacks = self.login_callbacks(job) if self.login_callbacks else None
@@ -124,6 +130,14 @@ class DiscordJobQueue:
                     finished = store.get_discord_job(job.job_id) or job
             except Exception as exc:
                 message = str(redact(exc)) or type(exc).__name__
+                LOGGER.error(
+                    "Discord job failed job=%s command=%s error=%s: %s",
+                    job.job_id,
+                    job.command,
+                    type(exc).__name__,
+                    message,
+                    exc_info=redacted_exc_info(exc),
+                )
                 with StateStore(self.config.database_path) as store:
                     store.update_discord_job(
                         job.job_id, status="failed", progress="Failed", error=message

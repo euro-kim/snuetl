@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from types import TracebackType
 from urllib.parse import urlsplit, urlunsplit
 
 _URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
@@ -24,6 +25,14 @@ def redact(value: object) -> str:
             return "[REDACTED_URL]"
 
     return _URL.sub(strip_query, text)
+
+
+def redacted_exc_info(
+    error: BaseException,
+) -> tuple[type[BaseException], BaseException, TracebackType | None]:
+    """Keep traceback frames while preventing the formatter from restoring secret text."""
+    safe = RuntimeError(f"{type(error).__name__}: {redact(error)}")
+    return type(safe), safe, error.__traceback__
 
 
 class RedactingFilter(logging.Filter):

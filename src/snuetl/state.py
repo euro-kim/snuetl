@@ -706,7 +706,7 @@ class StateStore:
         file_count = self.db.execute("SELECT count(*) FROM files WHERE status='ok'").fetchone()[0]
         return int(course_count), int(file_count)
 
-    def catalog_counts(self) -> tuple[int, int, int]:
+    def catalog_counts(self) -> tuple[int, int, int, int]:
         file_count = self.db.execute(
             "SELECT count(*) FROM catalog_files WHERE available=1"
         ).fetchone()[0]
@@ -718,4 +718,8 @@ class StateStore:
             """SELECT count(*) FROM catalog_content_items
                WHERE available=1 AND content_type='assignment'"""
         ).fetchone()[0]
-        return int(file_count), int(article_count), int(assignment_count)
+        quiz_count = self.db.execute(
+            """SELECT count(*) FROM catalog_content_items
+               WHERE available=1 AND content_type='quiz'"""
+        ).fetchone()[0]
+        return int(file_count), int(article_count), int(assignment_count), int(quiz_count)

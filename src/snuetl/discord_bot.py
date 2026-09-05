@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import secrets
 import threading
 import time
 from contextlib import suppress
-from pathlib import Path
 from typing import Literal
 
 import discord
@@ -18,13 +16,27 @@ from .discord_access import authorize_discord_interaction
 from .discord_config import load_discord_token
 from .discord_jobs import DiscordJobQueue
 from .discord_operations import LoginCallbacks, catalog_rows, doctor_data, status_data
-from .discord_ui import merge_video_page_selection, video_page, video_page_count
-from .logging_utils import redact
+from .discord_presenter import (
+    catalog_embed,
+    catalog_page_count,
+    doctor_embed,
+    embed_to_text,
+    exception_embed,
+    finished_job_embed,
+    jobs_embed,
+    notice_embed,
+    progress_job_embed,
+    pull_confirmation_embed,
+    queued_job_embed,
+    selection_embed,
+    status_embed,
+)
+from .discord_ui import merge_video_page_selection, video_page
+from .logging_utils import redact, redacted_exc_info
 from .puller import discover_pull_plan, plan_data
 from .state import DiscordJob, StateStore
 
 LOGGER = logging.getLogger(__name__)
-MAX_MESSAGE = 1900
 
 
 class VerificationBroker:
@@ -64,37 +76,42 @@ class VerificationBroker:
             self._condition.notify_all()
 
 
-def _short_json(value: object) -> str:
-    body = str(redact(json.dumps(value, ensure_ascii=False, indent=2, default=str)))
-    if len(body) > MAX_MESSAGE - 10:
-        body = body[: MAX_MESSAGE - 40] + "\n… output truncated"
-    return f"```json\n{body}\n```"
-
-
-def _job_summary(job: DiscordJob, result: dict[str, object] | None, root: Path) -> str:
-    title = f"snuetl {job.command} `{job.job_id}` — {job.status}"
-    if job.status == "failed":
-        return f"{title}\n{job.error or 'Unknown failure'}"[:MAX_MESSAGE]
-    if job.status in {"cancelled", "interrupted"}:
-        return f"{title}\n{job.progress or job.status}"[:MAX_MESSAGE]
-    if result is None:
-        return f"{title}\n{job.progress or ''}"[:MAX_MESSAGE]
-    safe = dict(result)
-    pull_result = safe.get("result")
-    if isinstance(pull_result, dict):
-        pull_result = dict(pull_result)
-        artifacts = pull_result.get("artifacts")
-        if isinstance(artifacts, list):
-            relative: list[str] = []
-            for raw in artifacts[:20]:
-                try:
-                    relative.append(str(Path(str(raw)).resolve().relative_to(root.resolve())))
-                except ValueError:
-                    relative.append(Path(str(raw)).name)
-            pull_result["artifacts"] = relative
-        safe["result"] = pull_result
-        safe.pop("managed_root", None)
-    return (title + "\n" + _short_json(safe))[:MAX_MESSAGE]
+async def _send_followup_embed(
+    interaction: discord.Interaction,
+    embed: discord.Embed,
+    *,
+    view: discord.ui.View | None = None,
+    ephemeral: bool = True,
+    wait: bool = False,
+):
+    """Send a follow-up without passing ``view=None`` to discord.py's webhook API."""
+    try:
+        if view is None:
+            return await interaction.followup.send(
+                embed=embed,
+                ephemeral=ephemeral,
+                wait=wait,
+            )
+        return await interaction.followup.send(
+            embed=embed,
+            view=view,
+            ephemeral=ephemeral,
+            wait=wait,
+        )
+    except discord.Forbidden:
+        content = embed_to_text(embed)
+        if view is None:
+            return await interaction.followup.send(
+                content=content,
+                ephemeral=ephemeral,
+                wait=wait,
+            )
+        return await interaction.followup.send(
+            content=content,
+            view=view,
+            ephemeral=ephemeral,
+            wait=wait,
+        )
 
 
 def run_discord_bot(config: Config) -> None:
@@ -106,6 +123,57 @@ def run_discord_bot(config: Config) -> None:
     guild = discord.Object(id=config.discord.guild_id)
     intents = discord.Intents.none()
     intents.guilds = True
+
+    def unwrap_error(error: BaseException) -> BaseException:
+        current = error
+        while isinstance(current, app_commands.CommandInvokeError):
+            current = current.original
+        return current
+
+    async def respond_error(
+        interaction: discord.Interaction,
+        error: BaseException,
+        *,
+        context: str,
+    ) -> None:
+        root = unwrap_error(error)
+        reference = secrets.token_hex(4)
+        LOGGER.error(
+            "Discord %s failed ref=%s error=%s: %s",
+            context,
+            reference,
+            type(root).__name__,
+            redact(root),
+            exc_info=redacted_exc_info(root),
+        )
+        embed = exception_embed(root, reference)
+        try:
+            if interaction.response.is_done():
+                await _send_followup_embed(interaction, embed)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.Forbidden:
+            content = embed_to_text(embed)
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(content=content, ephemeral=True)
+                else:
+                    await interaction.response.send_message(content=content, ephemeral=True)
+            except Exception as send_error:
+                LOGGER.error(
+                    "Could not publish Discord error ref=%s: %s", reference, redact(send_error)
+                )
+        except discord.HTTPException as send_error:
+            LOGGER.error(
+                "Could not publish Discord error ref=%s: %s", reference, redact(send_error)
+            )
+        except Exception as send_error:
+            LOGGER.error(
+                "Unexpected failure publishing Discord error ref=%s: %s",
+                reference,
+                redact(send_error),
+                exc_info=redacted_exc_info(send_error),
+            )
 
     class Bot(discord.Client):
         def __init__(self) -> None:
@@ -168,29 +236,58 @@ def run_discord_bot(config: Config) -> None:
             except (discord.HTTPException, AttributeError):
                 return None
 
+        async def _publish_job_embed(
+            self,
+            job: DiscordJob,
+            embed: discord.Embed,
+            *,
+            clear_view: bool = False,
+        ) -> None:
+            target = await self._job_message(job)
+            if target is None:
+                LOGGER.warning("Discord job message is unavailable job=%s", job.job_id)
+                return
+            try:
+                if clear_view:
+                    await target.edit(
+                        content=None,
+                        embed=embed,
+                        view=None,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                    await target.edit(
+                        content=None,
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except discord.Forbidden:
+                try:
+                    if clear_view:
+                        await target.edit(content=embed_to_text(embed), embed=None, view=None)
+                    else:
+                        await target.edit(content=embed_to_text(embed), embed=None)
+                except discord.HTTPException as error:
+                    LOGGER.error("Could not update Discord job %s: %s", job.job_id, redact(error))
+            except discord.HTTPException as error:
+                LOGGER.error("Could not update Discord job %s: %s", job.job_id, redact(error))
+
         async def on_job_progress(self, job: DiscordJob, message: str) -> None:
             now = time.monotonic()
             if now - self.last_edits.get(job.job_id, 0) < 4:
                 return
             self.last_edits[job.job_id] = now
-            target = await self._job_message(job)
-            if target is not None:
-                await target.edit(
-                    content=f"snuetl {job.command} `{job.job_id}` — {message}"[:MAX_MESSAGE],
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            await self._publish_job_embed(job, progress_job_embed(job, message))
 
         async def on_job_finished(self, job: DiscordJob, result: dict[str, object] | None) -> None:
             broker = self.brokers.pop(job.job_id, None)
             if broker is not None:
                 broker.close()
-            target = await self._job_message(job)
-            if target is not None:
-                await target.edit(
-                    content=_job_summary(job, result, config.download_dir),
-                    view=None,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            await self._publish_job_embed(
+                job,
+                finished_job_embed(job, result, config.download_dir),
+                clear_view=True,
+            )
 
     bot = Bot()
 
@@ -204,7 +301,10 @@ def run_discord_bot(config: Config) -> None:
         if decision.allowed:
             return True
         if not interaction.response.is_done():
-            await interaction.response.send_message(decision.reason, ephemeral=True)
+            await interaction.response.send_message(
+                embed=notice_embed("Command unavailable", decision.reason, tone="error"),
+                ephemeral=True,
+            )
         return False
 
     async def owns_control(interaction: discord.Interaction, owner_id: int) -> bool:
@@ -214,7 +314,10 @@ def run_discord_bot(config: Config) -> None:
             return True
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "This private control belongs to the owner who opened it.", ephemeral=True
+                embed=notice_embed(
+                    "Private control", "Only the person who opened this control can use it."
+                ),
+                ephemeral=True,
             )
         return False
 
@@ -269,14 +372,42 @@ def run_discord_bot(config: Config) -> None:
             or folded in str(row["semester_name"]).casefold()
         ][:25]
 
+    async def job_autocomplete(
+        interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        decision = authorize_discord_interaction(
+            config.discord,
+            guild_id=interaction.guild_id,
+            channel_id=interaction.channel_id,
+            user_id=interaction.user.id,
+        )
+        if not decision.allowed or not config.database_path.exists():
+            return []
+        folded = current.casefold()
+        with StateStore(config.database_path) as store:
+            jobs = store.list_discord_jobs(limit=25)
+        return [
+            app_commands.Choice(
+                name=f"{job.command} · {job.status} · {job.job_id}"[:100], value=job.job_id
+            )
+            for job in jobs
+            if job.status in {"queued", "running", "cancel_requested"}
+            and (not folded or folded in job.job_id.casefold() or folded in job.command.casefold())
+        ][:25]
+
     async def post_job(interaction: discord.Interaction, job: DiscordJob) -> None:
         channel = interaction.channel
         if channel is None or not hasattr(channel, "send"):
             raise RuntimeError("The configured Discord channel is unavailable")
-        message = await channel.send(
-            f"snuetl {job.command} `{job.job_id}` — queued by {interaction.user.mention}",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        embed = queued_job_embed(job, interaction.user.display_name)
+        try:
+            message = await channel.send(
+                embed=embed, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.Forbidden:
+            message = await channel.send(
+                content=embed_to_text(embed), allowed_mentions=discord.AllowedMentions.none()
+            )
         with StateStore(config.database_path) as store:
             store.update_discord_job(job.job_id, message_id=message.id)
 
@@ -298,7 +429,9 @@ def run_discord_bot(config: Config) -> None:
     async def status_command(interaction: discord.Interaction) -> None:
         if not await guard(interaction):
             return
-        await interaction.response.send_message(_short_json(status_data(config)), ephemeral=True)
+        await interaction.response.send_message(
+            embed=status_embed(status_data(config)), ephemeral=True
+        )
 
     @group.command(name="doctor", description="Check this snuetl installation")
     async def doctor_command(interaction: discord.Interaction) -> None:
@@ -306,7 +439,7 @@ def run_discord_bot(config: Config) -> None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         value = await asyncio.to_thread(doctor_data, config)
-        await interaction.followup.send(_short_json(value), ephemeral=True)
+        await _send_followup_embed(interaction, embed=doctor_embed(value), ephemeral=True)
 
     async def send_catalog(
         interaction: discord.Interaction, kind: str, course: str | None = None
@@ -315,37 +448,65 @@ def run_discord_bot(config: Config) -> None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         rows = await asyncio.to_thread(catalog_rows, config, kind, course)
-        await interaction.followup.send(
-            _short_json({"count": len(rows), "items": rows}), ephemeral=True
+        view = (
+            CatalogView(kind, rows, course, interaction.user.id)
+            if catalog_page_count(rows) > 1
+            else None
         )
+        message = await _send_followup_embed(
+            interaction,
+            embed=catalog_embed(kind, rows, course=course),
+            view=view,
+            ephemeral=True,
+            wait=True,
+        )
+        if view is not None:
+            view.message = message
 
     @group.command(name="courses", description="List active courses")
     async def courses_command(interaction: discord.Interaction) -> None:
         await send_catalog(interaction, "courses")
 
     @group.command(name="files", description="List course files without downloading")
+    @app_commands.describe(course="Course name or ID; leave empty to include every course")
     @app_commands.autocomplete(course=course_autocomplete)
     async def files_command(interaction: discord.Interaction, course: str | None = None) -> None:
         await send_catalog(interaction, "files", course)
 
     @group.command(name="articles", description="List announcements and course pages")
+    @app_commands.describe(course="Course name or ID; leave empty to include every course")
     @app_commands.autocomplete(course=course_autocomplete)
     async def articles_command(interaction: discord.Interaction, course: str | None = None) -> None:
         await send_catalog(interaction, "articles", course)
 
     @group.command(name="assignments", description="List assignments and due dates")
+    @app_commands.describe(course="Course name or ID; leave empty to include every course")
     @app_commands.autocomplete(course=course_autocomplete)
     async def assignments_command(
         interaction: discord.Interaction, course: str | None = None
     ) -> None:
         await send_catalog(interaction, "assignments", course)
 
+    @group.command(name="quizzes", description="List quizzes and due dates")
+    @app_commands.describe(course="Course name or ID; leave empty to include every course")
+    @app_commands.autocomplete(course=course_autocomplete)
+    async def quizzes_command(interaction: discord.Interaction, course: str | None = None) -> None:
+        await send_catalog(interaction, "quizzes", course)
+
     async def enqueue_simple(interaction: discord.Interaction, command: str) -> None:
         if not await guard(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         job = await enqueue(interaction, command, {})
-        await interaction.followup.send(f"Queued `{job.job_id}`.", ephemeral=True)
+        await _send_followup_embed(
+            interaction,
+            embed=notice_embed(
+                f"{command.title()} queued",
+                f"Job `{job.job_id}` was added to the background queue. Follow the new channel message for live progress.",
+                tone="success",
+            ),
+            ephemeral=True,
+        )
 
     @group.command(name="refresh", description="Refresh the complete cached catalog")
     async def refresh_command(interaction: discord.Interaction) -> None:
@@ -367,6 +528,52 @@ def run_discord_bot(config: Config) -> None:
             if self.message is not None:
                 with suppress(discord.HTTPException):
                     await self.message.edit(view=self)
+
+        async def on_error(
+            self,
+            interaction: discord.Interaction,
+            error: Exception,
+            _item: discord.ui.Item,
+        ) -> None:
+            await respond_error(interaction, error, context="component callback")
+
+    class CatalogView(ExpiringView):
+        def __init__(
+            self,
+            kind: str,
+            rows: list[dict[str, object]],
+            course: str | None,
+            owner_id: int,
+        ) -> None:
+            super().__init__(timeout=600)
+            self.kind = kind
+            self.rows = rows
+            self.course = course
+            self.owner_id = owner_id
+            self.page = 0
+            self.rebuild()
+
+        def rebuild(self) -> None:
+            self.clear_items()
+            previous = discord.ui.Button(label="Previous", disabled=self.page == 0)
+            next_button = discord.ui.Button(
+                label="Next", disabled=self.page + 1 >= catalog_page_count(self.rows)
+            )
+
+            async def move(interaction: discord.Interaction, amount: int) -> None:
+                if not await owns_control(interaction, self.owner_id):
+                    return
+                self.page += amount
+                self.rebuild()
+                await interaction.response.edit_message(
+                    embed=catalog_embed(self.kind, self.rows, page=self.page, course=self.course),
+                    view=self,
+                )
+
+            previous.callback = lambda interaction: move(interaction, -1)
+            next_button.callback = lambda interaction: move(interaction, 1)
+            self.add_item(previous)
+            self.add_item(next_button)
 
     class VideoSelect(discord.ui.Select):
         def __init__(self, view: VideoSelectionView) -> None:
@@ -443,7 +650,11 @@ def run_discord_bot(config: Config) -> None:
                 if not await owns_control(interaction, self.owner_id):
                     return
                 await interaction.response.send_message(
-                    f"Selected {len(self.selected)} of {len(self.videos)} videos.", ephemeral=True
+                    embed=notice_embed(
+                        "Video selection",
+                        f"Selected **{len(self.selected)}** of **{len(self.videos)}** videos.",
+                    ),
+                    ephemeral=True,
                 )
 
             async def start_job(interaction: discord.Interaction) -> None:
@@ -451,7 +662,12 @@ def run_discord_bot(config: Config) -> None:
                     return
                 if not self.selected:
                     await interaction.response.send_message(
-                        "Select at least one video.", ephemeral=True
+                        embed=notice_embed(
+                            "Choose a video",
+                            "Select at least one video before starting.",
+                            tone="warning",
+                        ),
+                        ephemeral=True,
                     )
                     return
                 self.arguments["video_ids"] = sorted(self.selected)
@@ -460,7 +676,8 @@ def run_discord_bot(config: Config) -> None:
                     confirmation = ConfirmPullView(self.arguments, self.owner_id)
                     confirmation.message = self.message
                     await interaction.response.edit_message(
-                        content="Force may overwrite locally edited generated content. Confirm?",
+                        content=None,
+                        embed=pull_confirmation_embed(self.arguments),
                         view=confirmation,
                     )
                     return
@@ -468,7 +685,13 @@ def run_discord_bot(config: Config) -> None:
                 job = await enqueue(interaction, "pull", self.arguments)
                 self.stop()
                 await interaction.edit_original_response(
-                    content=f"Queued `{job.job_id}` with {len(self.selected)} videos.", view=None
+                    content=None,
+                    embed=notice_embed(
+                        "Video pull queued",
+                        f"Queued job `{job.job_id}` with **{len(self.selected)}** selected videos. Follow the channel message for progress.",
+                        tone="success",
+                    ),
+                    view=None,
                 )
 
             async def cancel_selection(interaction: discord.Interaction) -> None:
@@ -476,7 +699,9 @@ def run_discord_bot(config: Config) -> None:
                     return
                 self.stop()
                 await interaction.response.edit_message(
-                    content="Video selection cancelled.", view=None
+                    content=None,
+                    embed=notice_embed("Video selection cancelled", "No pull was queued."),
+                    view=None,
                 )
 
             review.callback = show_review
@@ -486,11 +711,11 @@ def run_discord_bot(config: Config) -> None:
                 self.add_item(item)
 
         async def render(self, interaction: discord.Interaction) -> None:
-            content = (
-                f"Select videos — page {self.page + 1}/{(len(self.videos) + 24) // 25}; "
-                f"{len(self.selected)} selected. Selections on other pages are preserved."
+            await interaction.response.edit_message(
+                content=None,
+                embed=selection_embed(len(self.videos), self.page, len(self.selected)),
+                view=self,
             )
-            await interaction.response.edit_message(content=content, view=self)
 
     class ConfirmPullView(ExpiringView):
         def __init__(self, arguments: dict[str, object], owner_id: int) -> None:
@@ -507,7 +732,15 @@ def run_discord_bot(config: Config) -> None:
             await interaction.response.defer()
             job = await enqueue(interaction, "pull", self.arguments)
             self.stop()
-            await interaction.edit_original_response(content=f"Queued `{job.job_id}`.", view=None)
+            await interaction.edit_original_response(
+                content=None,
+                embed=notice_embed(
+                    "Pull queued",
+                    f"Job `{job.job_id}` was queued. Follow the channel message for progress.",
+                    tone="success",
+                ),
+                view=None,
+            )
 
         @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
         async def cancel_button(
@@ -516,9 +749,23 @@ def run_discord_bot(config: Config) -> None:
             if not await owns_control(interaction, self.owner_id):
                 return
             self.stop()
-            await interaction.response.edit_message(content="Pull cancelled.", view=None)
+            await interaction.response.edit_message(
+                content=None,
+                embed=notice_embed("Pull cancelled", "No files were changed."),
+                view=None,
+            )
 
     @group.command(name="pull", description="Pull selected course content to server storage")
+    @app_commands.describe(
+        kind="Type of course content to pull",
+        course="Course name or ID; leave empty for every active course",
+        semester="Semester; leave empty for every active semester",
+        dry_run="Preview what would happen without writing files",
+        force="Overwrite changed generated files; user-created files remain untouched",
+        best="Download the best available video quality",
+        max_height="Maximum video resolution when best is false",
+        captions="Download available video captions",
+    )
     @app_commands.autocomplete(course=course_autocomplete, semester=semester_autocomplete)
     async def pull_command(
         interaction: discord.Interaction,
@@ -556,11 +803,18 @@ def run_discord_bot(config: Config) -> None:
             )
             videos = list(plan_data(plan)["videos"])
             if not videos:
-                await interaction.followup.send("No selectable videos were found.", ephemeral=True)
+                await _send_followup_embed(
+                    interaction,
+                    embed=notice_embed(
+                        "No videos found", "No selectable videos matched those filters."
+                    ),
+                    ephemeral=True,
+                )
                 return
             view = VideoSelectionView(arguments, videos, interaction.user.id)
-            view.message = await interaction.followup.send(
-                f"Select videos — page 1/{video_page_count(videos)}; 0 selected.",
+            view.message = await _send_followup_embed(
+                interaction,
+                embed=selection_embed(len(videos), 0, 0),
                 view=view,
                 ephemeral=True,
                 wait=True,
@@ -569,7 +823,7 @@ def run_discord_bot(config: Config) -> None:
         if force:
             view = ConfirmPullView(arguments, interaction.user.id)
             await interaction.response.send_message(
-                "Force may overwrite locally edited generated content. Confirm?",
+                embed=pull_confirmation_embed(arguments),
                 view=view,
                 ephemeral=True,
             )
@@ -577,7 +831,15 @@ def run_discord_bot(config: Config) -> None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         job = await enqueue(interaction, "pull", arguments)
-        await interaction.followup.send(f"Queued `{job.job_id}`.", ephemeral=True)
+        await _send_followup_embed(
+            interaction,
+            embed=notice_embed(
+                "Pull queued",
+                f"Job `{job.job_id}` was added to the background queue. Follow the channel message for progress.",
+                tone="success",
+            ),
+            ephemeral=True,
+        )
 
     class CodeModal(discord.ui.Modal, title="SNU verification code"):
         code = discord.ui.TextInput(
@@ -595,9 +857,18 @@ def run_discord_bot(config: Config) -> None:
             broker = bot.brokers.get(self.job_id)
             accepted = broker is not None and broker.submit(str(self.code))
             await interaction.response.send_message(
-                "Verification code submitted." if accepted else "This login request has expired.",
+                embed=notice_embed(
+                    "Verification code submitted" if accepted else "Login request expired",
+                    "The background login will continue."
+                    if accepted
+                    else "Run `/snuetl login` again.",
+                    tone="success" if accepted else "warning",
+                ),
                 ephemeral=True,
             )
+
+        async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+            await respond_error(interaction, error, context="verification modal")
 
     class LoginCodeView(ExpiringView):
         def __init__(self, job_id: str, owner_id: int) -> None:
@@ -614,6 +885,7 @@ def run_discord_bot(config: Config) -> None:
             await interaction.response.send_modal(CodeModal(self.job_id, self.owner_id))
 
     @group.command(name="login", description="Re-login using saved SNU credentials and Discord 2FA")
+    @app_commands.describe(method="Where SNU should send the verification code")
     async def login_command(
         interaction: discord.Interaction, method: Literal["email", "phone"] = "email"
     ) -> None:
@@ -627,8 +899,13 @@ def run_discord_bot(config: Config) -> None:
         bot.brokers[job.job_id] = VerificationBroker(config.login_timeout_seconds)
         await post_job(interaction, job)
         view = LoginCodeView(job.job_id, interaction.user.id)
-        view.message = await interaction.followup.send(
-            f"Queued login `{job.job_id}`. When SNU sends the code, use this button.",
+        view.message = await _send_followup_embed(
+            interaction,
+            embed=notice_embed(
+                "Login started",
+                f"Queued job `{job.job_id}` using **{method}** verification. When the code arrives, tap the button below.",
+                tone="success",
+            ),
             view=view,
             ephemeral=True,
             wait=True,
@@ -641,28 +918,27 @@ def run_discord_bot(config: Config) -> None:
         with StateStore(config.database_path) as store:
             jobs = store.list_discord_jobs(limit=10)
         await interaction.response.send_message(
-            _short_json(
-                [
-                    {
-                        "job_id": job.job_id,
-                        "command": job.command,
-                        "status": job.status,
-                        "progress": job.progress,
-                        "created_at": job.created_at,
-                    }
-                    for job in jobs
-                ]
-            ),
+            embed=jobs_embed(jobs),
             ephemeral=True,
         )
 
     @group.command(name="cancel", description="Cancel a queued or running Discord job")
+    @app_commands.describe(job_id="Choose a queued or running job")
+    @app_commands.autocomplete(job_id=job_autocomplete)
     async def cancel_command(interaction: discord.Interaction, job_id: str) -> None:
         if not await guard(interaction):
             return
         changed = bot.queue.cancel(job_id.strip())
         await interaction.response.send_message(
-            "Cancellation requested." if changed else "No queued or running job has that ID.",
+            embed=notice_embed(
+                "Cancellation requested" if changed else "Job not found",
+                (
+                    f"Asked job `{job_id.strip()}` to stop safely."
+                    if changed
+                    else "That job is not queued or running. Use `/snuetl jobs` to see recent jobs."
+                ),
+                tone="warning" if changed else "error",
+            ),
             ephemeral=True,
         )
 
@@ -670,11 +946,6 @@ def run_discord_bot(config: Config) -> None:
     async def command_error(
         interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
-        message = f"Command failed: {redact(error)}"[:MAX_MESSAGE]
-        LOGGER.error("Discord application command failed: %s", redact(error))
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
+        await respond_error(interaction, error, context="application command")
 
     bot.run(token, log_handler=None)

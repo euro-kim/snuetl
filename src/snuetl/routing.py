@@ -8,6 +8,8 @@ from .config import Config, DirectoryRoute
 from .models import Course
 from .paths import course_content_dir, sanitize_component
 
+VIDEO_DIRECTORY_ROUTE_ID = "snuetl-videos"
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedRoute:
@@ -119,6 +121,19 @@ def resolve_route(
             item[0],
         ),
     )
+    if selected.route_id == VIDEO_DIRECTORY_ROUTE_ID and kind == "videos":
+        root = selected.destination.expanduser().resolve()
+        return ResolvedRoute(
+            course_content_dir(
+                root,
+                course.display_name,
+                course.remote_id,
+                course.semester.semester_code if course.semester else None,
+                kind,
+            ),
+            normalized_folder,
+            selected.route_id,
+        )
     return ResolvedRoute(
         selected.destination,
         normalized_folder[len(selected.remote_folder) :],

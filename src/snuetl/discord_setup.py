@@ -18,6 +18,7 @@ from .config import Config, DiscordSettings, default_config_path, save_config
 from .credentials import load_credentials
 from .discord_config import load_discord_token, save_discord_token
 from .scheduler import (
+    discord_service_is_active,
     discord_service_is_enabled,
     install_discord_service,
     linger_status,
@@ -31,6 +32,7 @@ DISCORD_SETUP_DOCS_URL = "https://docs.discord.com/developers/quick-start/gettin
 REQUIRED_DISCORD_PERMISSIONS = (
     ("View Channel", "view_channel", 1024, "See the one channel bound to snuetl"),
     ("Send Messages", "send_messages", 2048, "Post progress and final results"),
+    ("Embed Links", "embed_links", 16384, "Display readable status and result cards"),
     (
         "Read Message History",
         "read_message_history",
@@ -241,6 +243,7 @@ def discord_status(config: Config) -> dict[str, object]:
         "owner_ids": sorted(config.discord.owner_ids),
         "token_present": load_discord_token(config) is not None,
         "service_enabled": discord_service_is_enabled(),
+        "service_active": discord_service_is_active(),
         "permissions_integer": DISCORD_PERMISSIONS,
         "required_permissions": [item[0] for item in REQUIRED_DISCORD_PERMISSIONS],
         "invite_url": invite_url(config.discord.application_id)
@@ -431,11 +434,11 @@ def configure_discord(
         console.print(
             "Create or choose a normal text channel such as [cyan]#snuetl[/cyan]. For stricter "
             "Discord-side isolation, open [bold]Server Settings > Roles[/bold], select the bot "
-            "role, and turn its three permissions off server-wide. Then open "
+            "role, and turn its four permissions off server-wide. Then open "
             "[bold]Edit Channel > Permissions[/bold], add that role, and explicitly allow only:"
         )
         console.print(
-            "  View Channel · Send Messages · Read Message History",
+            "  View Channel · Send Messages · Embed Links · Read Message History",
             markup=False,
         )
         console.print(

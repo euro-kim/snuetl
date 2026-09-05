@@ -25,6 +25,7 @@ class CatalogRefreshSummary:
     articles: int
     assignments: int
     module_items: int = 0
+    quizzes: int = 0
     videos: int = 0
 
 
@@ -61,16 +62,16 @@ def _persist_result(
                     values,
                     scope="articles",
                 )
-        elif kind == "assignments":
+        elif kind in {"assignments", "quizzes"}:
             for course in result.courses:
                 values = [
                     item for owner, item in result.items if owner.remote_id == course.remote_id
                 ]
                 store.replace_catalog_content(
                     course,
-                    ("assignment",),
+                    ("assignment", "quiz"),
                     values,
-                    scope="assignments",
+                    scope="coursework",
                 )
         elif kind == "videos":
             for course in result.courses:
@@ -137,15 +138,23 @@ def inspect_catalog(
             result = CatalogResult(tuple(selected), items=items)
             _persist_result(config, result, kind, all_courses=tuple(courses))
             return result
-        if kind == "assignments":
-            items = tuple(
+        if kind in {"assignments", "quizzes"}:
+            coursework = tuple(
                 (course, item)
                 for course in selected
                 for item in discovery.discover_assignments(course)
             )
-            result = CatalogResult(tuple(selected), items=items)
-            _persist_result(config, result, kind, all_courses=tuple(courses))
-            return result
+            _persist_result(
+                config,
+                CatalogResult(tuple(selected), items=coursework),
+                kind,
+                all_courses=tuple(courses),
+            )
+            wanted = "quiz" if kind == "quizzes" else "assignment"
+            return CatalogResult(
+                tuple(selected),
+                items=tuple(pair for pair in coursework if pair[1].kind == wanted),
+            )
         if kind == "videos":
             modules = tuple(
                 (course, item) for course in selected for item in discovery.discover_modules(course)
@@ -196,14 +205,22 @@ def refresh_catalog(
             )
             store.replace_catalog_content(
                 course,
-                ("assignment",),
+                ("assignment", "quiz"),
                 assignments_by_course[course.remote_id],
-                scope="assignments",
+                scope="coursework",
             )
             store.replace_catalog_modules(course, modules_by_course[course.remote_id])
         file_count = sum(map(len, files_by_course.values()))
         article_count = sum(map(len, articles_by_course.values()))
-        assignment_count = sum(map(len, assignments_by_course.values()))
+        assignment_count = sum(
+            1
+            for values in assignments_by_course.values()
+            for item in values
+            if item.kind == "assignment"
+        )
+        quiz_count = sum(
+            1 for values in assignments_by_course.values() for item in values if item.kind == "quiz"
+        )
         module_count = sum(map(len, modules_by_course.values()))
         video_count = sum(
             1
@@ -214,12 +231,14 @@ def refresh_catalog(
         store.record_catalog_refresh("files", file_count)
         store.record_catalog_refresh("articles", article_count)
         store.record_catalog_refresh("assignments", assignment_count)
+        store.record_catalog_refresh("quizzes", quiz_count)
         store.record_catalog_refresh("modules", module_count)
     return CatalogRefreshSummary(
         courses=len(courses),
         files=file_count,
         articles=article_count,
         assignments=assignment_count,
+        quizzes=quiz_count,
         module_items=module_count,
         videos=video_count,
     )

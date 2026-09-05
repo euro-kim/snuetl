@@ -64,6 +64,11 @@ SCHEMA = (
         "currently available assignments",
     ),
     SchemaTable(
+        "quizzes",
+        "quiz_id, course_id, semester_id, semester_code, academic_year, course_name, title, url, published_at, due_at, last_seen_at",
+        "currently available quizzes",
+    ),
+    SchemaTable(
         "modules",
         "module_id, course_id, semester_code, course_name, module_name, item_count, last_seen_at",
         "course modules and their item counts",
@@ -217,6 +222,28 @@ FROM main.catalog_content_items AS i
 JOIN main.courses AS c ON c.remote_id = i.course_id
 LEFT JOIN main.semesters AS s ON s.semester_id = c.semester_id
 WHERE i.available = 1 AND i.content_type = 'assignment' AND c.active = 1;
+
+CREATE TEMP VIEW quizzes AS
+SELECT i.content_id AS quiz_id,
+       i.course_id,
+       c.semester_id,
+       s.semester_code,
+       s.academic_year,
+       CASE
+         WHEN s.semester_code IS NOT NULL
+          AND c.name LIKE s.semester_code || ' %'
+         THEN substr(c.name, length(s.semester_code) + 2)
+         ELSE c.name
+       END AS course_name,
+       i.title,
+       i.url,
+       i.published_at,
+       i.due_at,
+       i.last_seen_at
+FROM main.catalog_content_items AS i
+JOIN main.courses AS c ON c.remote_id = i.course_id
+LEFT JOIN main.semesters AS s ON s.semester_id = c.semester_id
+WHERE i.available = 1 AND i.content_type = 'quiz' AND c.active = 1;
 
 CREATE TEMP VIEW module_items AS
 SELECT m.item_id,

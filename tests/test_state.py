@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from snuetl.models import Course, RemoteFile
+from snuetl.models import ContentItem, Course, RemoteFile
 from snuetl.state import StateStore
 
 
@@ -42,5 +42,14 @@ def test_catalog_counts_remote_metadata_separately(tmp_path: Path) -> None:
         store.upsert_course(course)
         store.replace_catalog_files(course, [remote])
     with StateStore(database) as store:
-        assert store.catalog_counts() == (1, 0, 0)
+        store.replace_catalog_content(
+            course,
+            ("assignment", "quiz"),
+            [
+                ContentItem("a1", "c1", "assignment", "Homework", "https://lms.test/a1"),
+                ContentItem("q1", "c1", "quiz", "Quiz", "https://lms.test/q1"),
+            ],
+            scope="coursework",
+        )
+        assert store.catalog_counts() == (1, 0, 1, 1)
         assert store.counts() == (1, 0)

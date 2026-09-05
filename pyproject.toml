@@ -61,11 +61,13 @@ files = [
   "src/snuetl/discord_config.py",
   "src/snuetl/discord_jobs.py",
   "src/snuetl/discord_operations.py",
+  "src/snuetl/discord_presenter.py",
   "src/snuetl/discord_setup.py",
   "src/snuetl/discord_ui.py",
   "src/snuetl/dom_adapter.py",
   "src/snuetl/file_sync.py",
   "src/snuetl/lms_session.py",
+  "src/snuetl/logging_utils.py",
   "src/snuetl/media.py",
   "src/snuetl/routing.py",
 ]

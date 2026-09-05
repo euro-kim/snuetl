@@ -24,6 +24,7 @@ def test_installs_timer_with_current_python_and_config(tmp_path: Path, monkeypat
     timer = path.read_text(encoding="utf-8")
     assert 'ExecStart="/opt/snuetl env/bin/python" -m snuetl' in service
     assert f'--config "{config}" sync' in service
+    assert "ProtectKernelModules" not in service
     assert "OnUnitActiveSec=15min" in timer
     assert calls[-1][-2:] == ["--now", "snuetl.timer"]
 
@@ -34,7 +35,13 @@ def test_installs_hardened_discord_daemon_with_configured_write_paths(
     calls: list[list[str]] = []
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(scheduler.shutil, "which", lambda name: "/usr/bin/systemctl")
-    monkeypatch.setattr(scheduler.sys, "executable", "/opt/snuetl/bin/python")
+    base_python = tmp_path / "system" / "python"
+    base_python.parent.mkdir()
+    base_python.touch()
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+    monkeypatch.setattr(scheduler.sys, "executable", str(venv_python))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -53,10 +60,29 @@ def test_installs_hardened_discord_daemon_with_configured_write_paths(
         write_dirs=(tmp_path / "routed",),
     )
     service = service_path.read_text(encoding="utf-8")
+    assert f'ExecStart="{venv_python}" -m snuetl' in service
     assert "discord run" in service
     assert "Restart=on-failure" in service
     assert "NoNewPrivileges=true" in service
+    assert "ProtectKernelModules" not in service
     assert str(tmp_path / "state") in service
     assert str(tmp_path / "downloads") in service
     assert str(tmp_path / "routed") in service
     assert calls[-1][-2:] == ["--now", "snuetl-discord.service"]
+
+
+def test_discord_service_active_checks_runtime_state(monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(scheduler.shutil, "which", lambda name: "/usr/bin/systemctl")
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(scheduler.subprocess, "run", fake_run)
+    assert scheduler.discord_service_is_active() is True
+    assert commands == [["systemctl", "--user", "is-active", "--quiet", "snuetl-discord.service"]]

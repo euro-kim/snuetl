@@ -72,5 +72,8 @@ def test_dom_fixtures_map_every_catalog_entity_to_domain_models() -> None:
         ("announcement", "Welcome"),
         ("page", "Overview"),
     ]
-    assert adapter.discover_assignments(course)[0].title == "Homework 1"
+    assert [(item.kind, item.title) for item in adapter.discover_assignments(course)] == [
+        ("assignment", "Homework 1"),
+        ("quiz", "Week 1 Quiz"),
+    ]
     assert adapter.discover_modules(course)[0].title == "Lecture"

@@ -81,7 +81,7 @@ def _print_refresh(summary: CatalogRefreshSummary) -> None:
     console.print(
         "[green]Catalog refreshed:[/green] "
         f"{summary.courses} courses, {summary.files} files, "
-        f"{summary.articles} articles, {summary.assignments} assignments"
+        f"{summary.articles} articles, {summary.assignments} assignments, {summary.quizzes} quizzes"
     )
 
 

@@ -211,6 +211,7 @@ def print_commands() -> None:
         ("snuetl articles [COURSE]", "List announcement and course-page titles"),
         ("snuetl assignments [COURSE]", "List assignments and due dates"),
         ("snuetl refresh", "Cache all paginated catalog data for SQL queries"),
+        ("snuetl quizzes [COURSE]", "List quizzes and due dates"),
         ("snuetl sql", "Open the interactive read-only SQL shell"),
         ("snuetl sql --execute SQL", "Run one query over canonical catalog views"),
         ("snuetl schema", "Show canonical SQL tables and field names"),
@@ -218,6 +219,7 @@ def print_commands() -> None:
         ("snuetl sync", "Compatibility alias for pulling course files"),
         ("snuetl headless [on|off]", "Show or set the default browser mode"),
         ("snuetl directory", "Show or configure pull roots and routing rules"),
+        ("snuetl directory videos [PATH]", "Show or set the large-video storage root"),
         ("snuetl discord", "Guided Discord bot setup and daemon installation"),
         ("snuetl discord guide", "Show the Developer Portal setup checklist"),
         ("snuetl profile [NAME]", "List or switch the active eTL identity"),
@@ -267,7 +269,12 @@ def print_catalog(result: CatalogResult, kind: str) -> None:
         console.print(table)
         return
 
-    title = "Articles and announcements" if kind == "articles" else "Assignments"
+    titles = {
+        "articles": "Articles and announcements",
+        "assignments": "Assignments",
+        "quizzes": "Quizzes",
+    }
+    title = titles[kind]
     table = Table(title=f"{title} ({len(result.items)})")
     table.add_column("Semester", style="magenta", no_wrap=True)
     table.add_column("Course ID", style="cyan", no_wrap=True)

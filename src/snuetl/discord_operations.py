@@ -10,10 +10,16 @@ from .browser import interactive_login
 from .catalog import inspect_catalog, refresh_catalog
 from .config import Config, default_config_path
 from .credentials import load_credentials
-from .directory_manager import repair_legacy_layout, validate_managed_root
+from .directory_manager import (
+    configured_directory_permission_reports,
+    configured_video_directory,
+    has_separate_video_directory,
+    repair_legacy_layout,
+    validate_managed_root,
+)
 from .onboarding import browser_available
 from .puller import discover_pull_plan, execute_pull, plan_data
-from .scheduler import discord_service_is_enabled, linger_status
+from .scheduler import discord_service_is_active, discord_service_is_enabled, linger_status
 from .state import StateStore
 from .syncer import synchronize
 
@@ -32,6 +38,8 @@ def status_data(config: Config) -> dict[str, object]:
         "saved_username": saved.username if saved else None,
         "state_dir": str(config.state_dir),
         "download_dir": str(config.download_dir),
+        "video_directory": str(configured_video_directory(config)),
+        "video_directory_separate": has_separate_video_directory(config),
         "headless": True,
         "last_sync": None,
         "courses": 0,
@@ -39,10 +47,14 @@ def status_data(config: Config) -> dict[str, object]:
         "articles": 0,
         "assignments": 0,
         "downloaded_files": 0,
+        "quizzes": 0,
         "discord": {
             "enabled": config.discord.enabled,
             "configured": config.discord.configured,
             "service_enabled": discord_service_is_enabled()
+            if platform.system() == "Linux"
+            else False,
+            "service_active": discord_service_is_active()
             if platform.system() == "Linux"
             else False,
         },
@@ -51,13 +63,14 @@ def status_data(config: Config) -> dict[str, object]:
         return data
     with StateStore(config.database_path) as store:
         courses, downloaded = store.counts()
-        remote_files, articles, assignments = store.catalog_counts()
+        remote_files, articles, assignments, quizzes = store.catalog_counts()
         last = store.last_run()
         data.update(
             courses=courses,
             remote_files=remote_files,
             articles=articles,
             assignments=assignments,
+            quizzes=quizzes,
             downloaded_files=downloaded,
             last_sync=dict(last) if last is not None else None,
         )
@@ -70,6 +83,17 @@ def doctor_data(config: Config, config_path: Path | None = None) -> dict[str, ob
     browser_ok, browser_detail = browser_available(config)
     saved = load_credentials(config)
     linger = linger_status() if platform.system() == "Linux" else None
+    permission_reports = configured_directory_permission_reports(config)
+    permissions_ok = all(report.safe for report in permission_reports)
+    permissions_detail = (
+        ", ".join(f"{report.path} ({report.mode:04o})" for report in permission_reports)
+        if permissions_ok
+        else " | ".join(
+            f"{report.path}: {'; '.join((*report.issues, *report.remediation))}"
+            for report in permission_reports
+            if not report.safe
+        )
+    )
     checks: list[dict[str, object]] = [
         {"name": "configuration", "ok": path.exists(), "detail": str(path)},
         {
@@ -89,6 +113,11 @@ def doctor_data(config: Config, config_path: Path | None = None) -> dict[str, ob
             "detail": str(config.state_dir),
         },
         {
+            "name": "managed_directory_permissions",
+            "ok": permissions_ok,
+            "detail": permissions_detail,
+        },
+        {
             "name": "saved_credentials",
             "ok": saved is not None,
             "detail": saved.username if saved else "required for remote re-login",
@@ -105,7 +134,7 @@ def doctor_data(config: Config, config_path: Path | None = None) -> dict[str, ob
             [
                 {
                     "name": "discord_service",
-                    "ok": discord_service_is_enabled(),
+                    "ok": discord_service_is_enabled() and discord_service_is_active(),
                     "detail": "user systemd service",
                     "optional": True,
                 },
@@ -153,6 +182,7 @@ def catalog_rows(config: Config, kind: str, course: str | None = None) -> list[d
                     "course": owner.display_name,
                     "content_id": item_value.remote_id,
                     "title": item_value.title,
+                    "content_type": item_value.kind,
                     "due_at": item_value.due_at,
                     "published_at": item_value.published_at,
                 }

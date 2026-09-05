@@ -45,12 +45,20 @@ def test_capabilities_has_versioned_agent_contract(capsys) -> None:
         "videos",
         "all",
     ]
+    assert "quizzes" in payload["data"]["commands"]["inspect"]
 
 
 def test_pull_videos_has_no_profile_selection_option() -> None:
     args = cli._parser().parse_args(["pull", "videos"])
 
     assert not hasattr(args, "profile")
+
+
+def test_quizzes_command_accepts_an_optional_course() -> None:
+    args = cli._parser().parse_args(["quizzes", "Systems"])
+
+    assert args.command == "quizzes"
+    assert args.course == "Systems"
 
 
 def test_discord_cli_exposes_daemon_and_owner_commands() -> None:
@@ -72,7 +80,7 @@ def test_discord_guide_is_available_before_setup(tmp_path: Path, capsys) -> None
     assert main(["--config", str(config_path), "discord", "guide", "--json"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["data"]["installation"]["permissions_integer"] == 68608
+    assert payload["data"]["installation"]["permissions_integer"] == 84992
     assert payload["data"]["bot_settings"]["privileged_gateway_intents"] == {
         "presence": False,
         "server_members": False,
@@ -113,6 +121,15 @@ def test_directory_parser_supports_detailed_binding() -> None:
     assert args.operation == "bind"
     assert args.value == "/srv/classes/A/B"
     assert args.remote_folder == "x/y"
+
+
+def test_directory_parser_supports_dedicated_video_storage() -> None:
+    separate = cli._parser().parse_args(["directory", "videos", "/mnt/large-videos"])
+    together = cli._parser().parse_args(["directory", "videos", "--default"])
+
+    assert (separate.operation, separate.value) == ("videos", "/mnt/large-videos")
+    assert separate.use_default is False
+    assert together.use_default is True
 
 
 def test_video_checklist_selection_is_passed_to_pull_plan(monkeypatch) -> None:

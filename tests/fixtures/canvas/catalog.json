@@ -46,6 +46,13 @@
       "name": "Homework 1",
       "due_at": "2026-09-10T00:00:00Z",
       "html_url": "/assignments/401"
+    },
+    {
+      "id": 402,
+      "name": "Week 1 Quiz",
+      "due_at": "2026-09-11T00:00:00Z",
+      "html_url": "/courses/101/quizzes/402",
+      "is_quiz_assignment": true
     }
   ],
   "modules": [

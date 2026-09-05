@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from snuetl.config import DirectoryRoute, load_config
+from snuetl.directory_manager import set_video_directory
 from snuetl.models import Course, Semester
 from snuetl.routing import parse_remote_folder, resolve_route, routed_file_path, validate_route
 
@@ -71,6 +72,14 @@ def test_course_specific_binding_wins_over_general_binding(tmp_path: Path) -> No
 
     assert result.base == tmp_path / "course"
     assert result.remaining_folder == ("Week 1",)
+
+
+def test_dedicated_video_root_preserves_course_hierarchy(tmp_path: Path) -> None:
+    config = set_video_directory(load_config(tmp_path / "missing.toml"), tmp_path / "videos")
+
+    result = resolve_route(config, _course(), "videos")
+
+    assert result.base == tmp_path / "videos" / "2026-2" / "Database Systems--101" / "videos"
 
 
 def test_remote_folder_matching_uses_sanitized_etl_components(tmp_path: Path) -> None:

@@ -3,15 +3,21 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import sqlite3
+import stat
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .config import Config, DirectoryRoute
 from .models import Course, Semester
-from .routing import routed_category_dir, routed_file_path
+from .routing import (
+    VIDEO_DIRECTORY_ROUTE_ID,
+    routed_category_dir,
+    routed_file_path,
+)
 from .state import StateStore
 
 
@@ -30,6 +36,25 @@ class MigrationSummary:
     moved: int = 0
     missing: int = 0
     failed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class DirectoryPermissionReport:
+    path: Path
+    exists: bool
+    is_directory: bool
+    mode: int | None
+    owner_uid: int | None
+    current_uid: int | None
+    owned_by_current_user: bool
+    readable: bool
+    writable: bool
+    searchable: bool
+    safe: bool
+    issues: tuple[str, ...] = ()
+    remediation: tuple[str, ...] = ()
+    changed: bool = False
+    previous_mode: int | None = None
 
 
 _LEGACY_COURSE = re.compile(r"^(?P<semester>\d{4}-\d+)\s+(?P<title>.+?)(?P<sep>--|-)(?P<id>\d+)$")
@@ -90,6 +115,157 @@ def validate_managed_root(path: Path) -> Path:
     return root
 
 
+def directory_permission_report(path: Path) -> DirectoryPermissionReport:
+    """Audit whether a managed root is private and usable by this process."""
+    root = validate_managed_root(path)
+    current_uid = os.geteuid() if hasattr(os, "geteuid") else None
+    if not root.exists():
+        return DirectoryPermissionReport(
+            path=root,
+            exists=False,
+            is_directory=False,
+            mode=None,
+            owner_uid=None,
+            current_uid=current_uid,
+            owned_by_current_user=True,
+            readable=False,
+            writable=False,
+            searchable=False,
+            safe=False,
+            issues=("directory does not exist",),
+            remediation=("It will be created with owner-only mode 0700 when applied.",),
+        )
+
+    details = root.stat()
+    mode = stat.S_IMODE(details.st_mode)
+    is_directory = stat.S_ISDIR(details.st_mode)
+    owned = current_uid is None or details.st_uid == current_uid
+    readable = os.access(root, os.R_OK)
+    writable = os.access(root, os.W_OK)
+    searchable = os.access(root, os.X_OK)
+    issues: list[str] = []
+    remediation: list[str] = []
+    quoted = shlex.quote(str(root))
+    if not is_directory:
+        issues.append("path exists but is not a directory")
+        remediation.append("Choose a directory path instead of a file.")
+    if not owned:
+        issues.append(
+            f"directory is owned by UID {details.st_uid}, not the current UID {current_uid}"
+        )
+        remediation.append(
+            f"Choose a directory you own or run: sudo chown {current_uid}:{os.getegid()} -- {quoted}"
+        )
+    if mode & 0o077:
+        issues.append(f"group or other users have access (mode {mode:04o})")
+        remediation.append(f"Remove shared access with: chmod 700 -- {quoted}")
+    if mode & 0o700 != 0o700:
+        issues.append(f"the owner lacks read, write, or search permission (mode {mode:04o})")
+        remediation.append(f"Restore owner access with: chmod 700 -- {quoted}")
+    if not readable:
+        issues.append("directory is not readable by snuetl")
+    if not writable:
+        issues.append("directory is not writable by snuetl")
+    if not searchable:
+        issues.append("directory is not searchable by snuetl")
+
+    return DirectoryPermissionReport(
+        path=root,
+        exists=True,
+        is_directory=is_directory,
+        mode=mode,
+        owner_uid=details.st_uid,
+        current_uid=current_uid,
+        owned_by_current_user=owned,
+        readable=readable,
+        writable=writable,
+        searchable=searchable,
+        safe=not issues,
+        issues=tuple(dict.fromkeys(issues)),
+        remediation=tuple(dict.fromkeys(remediation)),
+    )
+
+
+def secure_managed_directory(path: Path) -> DirectoryPermissionReport:
+    """Create or normalize one explicitly configured managed root to mode 0700."""
+    root = validate_managed_root(path)
+    before = directory_permission_report(root)
+    if before.exists and not before.is_directory:
+        raise PermissionError(f"managed path is not a directory: {root}")
+    if before.exists and not before.owned_by_current_user:
+        remediation = before.remediation[0] if before.remediation else "Choose a directory you own."
+        raise PermissionError(
+            f"cannot secure managed directory {root}: {'; '.join(before.issues)}. {remediation}"
+        )
+    try:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root.chmod(0o700)
+    except OSError as exc:
+        raise PermissionError(
+            f"cannot create or secure managed directory {root}: {exc}. "
+            "Choose an owner-writable directory and try again."
+        ) from exc
+    after = directory_permission_report(root)
+    if not after.safe:
+        guidance = " ".join(after.remediation) or "Choose an owner-only directory."
+        raise PermissionError(
+            f"managed directory permissions are still unsafe for {root}: "
+            f"{'; '.join(after.issues)}. {guidance}"
+        )
+    return replace(
+        after,
+        changed=not before.exists or before.mode != after.mode,
+        previous_mode=before.mode,
+    )
+
+
+def directory_permission_data(report: DirectoryPermissionReport) -> dict[str, object]:
+    return {
+        "path": str(report.path),
+        "exists": report.exists,
+        "is_directory": report.is_directory,
+        "mode": f"{report.mode:04o}" if report.mode is not None else None,
+        "previous_mode": f"{report.previous_mode:04o}"
+        if report.previous_mode is not None
+        else None,
+        "owner_uid": report.owner_uid,
+        "current_uid": report.current_uid,
+        "owned_by_current_user": report.owned_by_current_user,
+        "readable": report.readable,
+        "writable": report.writable,
+        "searchable": report.searchable,
+        "safe": report.safe,
+        "changed": report.changed,
+        "issues": list(report.issues),
+        "remediation": list(report.remediation),
+    }
+
+
+def configured_directory_permission_reports(
+    config: Config, *, secure: bool = False
+) -> list[DirectoryPermissionReport]:
+    """Audit each unique default or bound managed root in configuration order."""
+    paths = (config.download_dir, *(route.destination for route in config.directory_routes))
+    unique = tuple(dict.fromkeys(path.expanduser().resolve() for path in paths))
+    reports = [directory_permission_report(path) for path in unique]
+    if not secure:
+        return reports
+    blockers = [
+        report
+        for report in reports
+        if report.exists and (not report.is_directory or not report.owned_by_current_user)
+    ]
+    if blockers:
+        detail = " | ".join(
+            f"{report.path}: {'; '.join((*report.issues, *report.remediation))}"
+            for report in blockers
+        )
+        raise PermissionError(
+            "cannot secure configured directories without changing any permissions: " + detail
+        )
+    return [secure_managed_directory(path) for path in unique]
+
+
 def _stored_course(row: sqlite3.Row) -> Course:
     semester_code = str(row["semester_code"] or "") or None
     semester = Semester(semester_code, semester_code, semester_code) if semester_code else None
@@ -136,6 +312,31 @@ def remove_directory_route(config: Config, route_id: str) -> Config:
     if len(routes) == len(config.directory_routes):
         raise ValueError(f"unknown directory route: {route_id}")
     return replace(config, directory_routes=routes)
+
+
+def configured_video_directory(config: Config) -> Path:
+    for route in reversed(config.directory_routes):
+        if route.route_id == VIDEO_DIRECTORY_ROUTE_ID:
+            return route.destination
+    return config.download_dir
+
+
+def has_separate_video_directory(config: Config) -> bool:
+    return any(route.route_id == VIDEO_DIRECTORY_ROUTE_ID for route in config.directory_routes)
+
+
+def set_video_directory(config: Config, destination: Path) -> Config:
+    destination = validate_managed_root(destination)
+    routes = tuple(
+        route for route in config.directory_routes if route.route_id != VIDEO_DIRECTORY_ROUTE_ID
+    )
+    updated = replace(config, directory_routes=routes)
+    if destination == config.download_dir.expanduser().resolve():
+        return updated
+    return upsert_directory_route(
+        updated,
+        DirectoryRoute(VIDEO_DIRECTORY_ROUTE_ID, destination, kind="videos"),
+    )
 
 
 def directory_routes_data(config: Config) -> list[dict[str, object]]:

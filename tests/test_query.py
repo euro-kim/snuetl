@@ -34,6 +34,10 @@ def _seed_catalog(path: Path) -> None:
         "https://lms.test/a/701",
         published_at="2026-08-31",
     )
+    assignment = ContentItem("801", "101", "assignment", "Homework", "https://lms.test/a/801")
+    quiz = ContentItem(
+        "802", "101", "quiz", "Week 1 Quiz", "https://lms.test/q/802", due_at="2026-09-12"
+    )
     with StateStore(path) as store, store.transaction():
         store.upsert_course(course)
         store.replace_catalog_files(course, [remote])
@@ -42,6 +46,12 @@ def _seed_catalog(path: Path) -> None:
             ("announcement", "page"),
             [announcement],
             scope="articles",
+        )
+        store.replace_catalog_content(
+            course,
+            ("assignment", "quiz"),
+            [assignment, quiz],
+            scope="coursework",
         )
         store.replace_catalog_modules(
             course,
@@ -85,6 +95,10 @@ def test_queries_canonical_views(tmp_path: Path) -> None:
     announcements = execute_query(path, "SELECT announcement_id, title FROM announcements")
     assert announcements.rows == (("701", "Welcome"),)
     videos = execute_query(path, "SELECT video_id, module_name, title FROM videos")
+    assignments = execute_query(path, "SELECT assignment_id, title FROM assignments")
+    assert assignments.rows == (("801", "Homework"),)
+    quizzes = execute_query(path, "SELECT quiz_id, title FROM quizzes")
+    assert quizzes.rows == (("802", "Week 1 Quiz"),)
     assert videos.rows == (("v1", "Week 1", "Lecture 1"),)
 
 
@@ -96,6 +110,7 @@ def test_show_tables_lists_canonical_views(tmp_path: Path) -> None:
     assert ("files",) in result.rows
     assert ("assignments",) in result.rows
     assert ("videos",) in result.rows
+    assert ("quizzes",) in result.rows
     assert ("artifacts",) in result.rows
 
 

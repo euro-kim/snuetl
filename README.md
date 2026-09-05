@@ -139,6 +139,7 @@ snuetl courses                  list active course IDs and names
 snuetl files [COURSE]           list file titles, folders, sizes, and dates
 snuetl articles [COURSE]        list announcement and course-page titles
 snuetl assignments [COURSE]     list assignment titles and due dates
+snuetl quizzes [COURSE]         list quiz titles and due dates
 snuetl refresh                  cache every paginated catalog table
 snuetl sql                      open the interactive read-only SQL shell
 snuetl query                    compatibility alias for the SQL shell
@@ -148,6 +149,7 @@ snuetl pull [KIND]              pull files, articles, syllabi, videos, or all
 snuetl sync                     compatibility alias for pulling files
 snuetl headless [on|off]        show or set the default browser mode
 snuetl directory                show or configure pull roots and routing rules
+snuetl directory videos [PATH]  show or set the large-video storage root
 snuetl capabilities --json      describe the stable agent-facing contract
 snuetl status                   show the last sync and tracked counts
 snuetl doctor                   check browser, config, profile, and timer
@@ -198,27 +200,40 @@ The wizard displays these steps as you work:
    Message Content privileged intents can all remain off.
 5. Open the least-privilege invite printed by snuetl, select **Add to server**, choose the
    target server, and authorize it. The generated link requests only the `bot` and
-   `applications.commands` scopes and permission integer `68608`.
+   `applications.commands` scopes and permission integer `84992`.
 6. Create or choose one normal text channel, ideally a private channel named `#snuetl`.
    Enter `/snuetl claim` there and paste the one-time code from the terminal into
    Discord's `code` field. The code expires after ten minutes. The person who claims it
    becomes the first authorized snuetl owner.
 
-The bot needs exactly these three channel permissions:
+The bot needs exactly these four channel permissions:
 
 | Permission | Why |
 | --- | --- |
 | View Channel | Access the one bound channel |
 | Send Messages | Post progress and final results |
+| Embed Links | Display readable status and result cards |
 | Read Message History | Keep responses usable across reconnects |
 
 Do **not** grant Administrator, Manage Server, Manage Channels, Manage Roles, or Manage
 Messages. For stronger Discord-side isolation after installation, open **Server Settings
-→ Roles**, select the bot role, and remove its three server-wide permissions. Then open
+→ Roles**, select the bot role, and remove its four server-wide permissions. Then open
 **Edit Channel → Permissions** on `#snuetl`, add the bot role, and explicitly allow the
-three permissions there. Independently of Discord's visibility settings, snuetl checks
+four permissions there. Independently of Discord's visibility settings, snuetl checks
 every slash command, autocomplete request, button, select, and modal and rejects anything
 outside the claimed server, channel, and owner allowlist.
+
+Discord responses are designed for mobile rather than mirroring terminal JSON. Status,
+diagnostics, courses, files, articles, assignments, quizzes, and recent jobs use compact cards;
+long catalogs have owner-only Previous and Next buttons. Dates use Discord timestamps, so
+they appear in each viewer's local time zone. Background operations post one progress card
+that updates in place and finishes with a plain-language summary of what was downloaded,
+updated, preserved, skipped, or failed. `/snuetl cancel` suggests active job IDs, while
+course and semester inputs provide autocomplete from the current catalog.
+
+Expected failures provide a recovery action, while unexpected failures show a short error
+reference instead of a Python traceback or secret-bearing diagnostic. The matching redacted
+traceback is kept in the daemon journal for troubleshooting.
 
 The token is a password. Never paste it into Discord, a command-line argument, a chat
 message, or source control. If it is exposed, immediately use **Developer Portal → Bot →
@@ -238,7 +253,7 @@ The bot uses slash commands and Discord's Gateway, so it needs no public web ser
 redirect URL, Interactions Endpoint URL, client secret, or Message Content intent.
 
 Available mobile commands are `/snuetl status`, `doctor`, `courses`, `files`, `articles`,
-`assignments`, `refresh`, `sync`, `pull`, `login`, `jobs`, and `cancel`. Administrative
+`assignments`, `quizzes`, `refresh`, `sync`, `pull`, `login`, `jobs`, and `cancel`. Administrative
 terminal operations such as setup, SQL, directory changes, profile switching, update,
 logout, and uninstall are deliberately unavailable in Discord. Downloads remain on the
 server; Discord receives counts, warnings, progress, and paths relative to the managed
@@ -290,7 +305,7 @@ The interactive claim flow discovers these three IDs automatically.
 Discord's current official walkthrough is available in
 [Building your first Discord Bot](https://docs.discord.com/developers/quick-start/getting-started);
 its [permissions reference](https://docs.discord.com/developers/topics/permissions)
-documents the three permission bits in the generated invite.
+documents the four permission bits in the generated invite.
 
 The human-readable tables show semester codes separately (`2026-2`, `SNUON`), use
 canonical course IDs, and keep file names and folders distinct in storage. The table
@@ -357,7 +372,7 @@ freshness, and `.mode table|json|jsonl|csv` to change output without restarting.
 to leave query mode immediately.
 
 The canonical read-only tables are `semesters`, `courses`, `files`, `articles`,
-`announcements`, `pages`, `assignments`, `modules`, `module_items`, `videos`,
+`announcements`, `pages`, `assignments`, `quizzes`, `modules`, `module_items`, `videos`,
 `syllabi`, `artifacts`, `catalog_status`, and `sync_runs`. Run
 `snuetl schema` for their canonical field names. For example, use `course_id` rather
 than the ambiguous `class_id`, `file_id` for the remote file identifier, and
@@ -368,10 +383,15 @@ than the ambiguous `class_id`, `file_id` for the remote file identifier, and
 `articles` combines announcements and course pages while the `announcements` and
 `pages` views allow type-specific queries.
 
+`assignments` and `quizzes` are separate views and commands. Both are discovered from
+Canvas's assignment feed, then classified using its quiz metadata. The first refresh after
+upgrading automatically retires any old assignment-classified quiz row and stores it as a
+quiz; no manual database migration is needed.
+
 SNU's API pagination is consumed completely by following every `rel="next"` link. A
 catalog scope is committed only after its pages have been fetched, and freshness can
 be inspected with `SELECT * FROM catalog_status`. Running `courses`, `files`,
-`articles`, or `assignments` also refreshes the corresponding cached metadata; the
+`articles`, `assignments`, or `quizzes` also refreshes the corresponding cached metadata; the
 dedicated `refresh` command updates all of them in one authenticated browser session.
 
 `snuetl update` remembers how pipx installed the package. A PyPI installation is
@@ -420,11 +440,33 @@ snuetl directory
 snuetl directory set /data/classes --dry-run
 snuetl directory set /data/classes
 snuetl directory /data/classes              # shorthand for "set"
+snuetl directory videos                      # show the current video root
+snuetl directory videos /mnt/large-videos --dry-run
+snuetl directory videos /mnt/large-videos    # migrate tracked videos separately
+snuetl directory videos --default            # keep videos with regular course files
 snuetl directory bind /data/classes/A --name x --kind files --remote-folder x
 snuetl directory bind /data/classes/A/B --name y --kind files --remote-folder y
 snuetl directory bind /data/classes/A/C --name z --kind files --remote-folder z
 snuetl directory unbind y
 ```
+
+Guided setup asks separately where regular course files and large video downloads should
+live. A dedicated video location is a storage root, so it retains the collision-safe
+`<semester>/<course name>--<course id>/videos/` hierarchy rather than flattening every
+course into one directory. Existing tracked videos migrate automatically when setup is
+rerun or `snuetl directory videos PATH` is applied; `--dry-run` previews the move and
+`--no-migrate` changes only future placement.
+
+Managed roots are private by default. Guided setup and successful `directory set`,
+`directory videos`, or `directory bind` operations create each configured root with
+owner-only mode `0700`, or
+tighten an owner-controlled existing root to `0700`. The response reports the current
+mode, ownership, read/write/search access, and whether permissions changed. A read-only
+`snuetl directory` or `--dry-run` audit never changes permissions; unsafe paths produce
+an `UNSAFE_DIRECTORY_PERMISSIONS` warning with an exact `chmod 700` or ownership remedy.
+If a path is owned by someone else, is a file, is not writable, or is on a filesystem
+that cannot enforce the safe mode, setup stops instead of saving an unusable or exposed
+destination. `snuetl doctor` audits the default root and every binding as well.
 
 A binding can match any combination of cached course ID or unique title, canonical
 semester, content kind, and eTL folder prefix:

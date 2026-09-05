@@ -3,12 +3,13 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
+import discord
 import pytest
 
 from snuetl.config import DiscordSettings, load_config, save_config
 from snuetl.credentials import SavedCredentials, save_credentials
 from snuetl.discord_access import authorize_discord_interaction
-from snuetl.discord_bot import VerificationBroker
+from snuetl.discord_bot import VerificationBroker, _send_followup_embed
 from snuetl.discord_config import load_discord_token, save_discord_token
 from snuetl.discord_jobs import DiscordJobQueue
 from snuetl.discord_setup import (
@@ -176,6 +177,7 @@ def test_noninteractive_setup_validates_and_persists_without_token_in_config(
         lambda path, **kwargs: tmp_path / "snuetl-discord.service",
     )
     monkeypatch.setattr(discord_setup, "discord_service_is_enabled", lambda: True)
+    monkeypatch.setattr(discord_setup, "discord_service_is_active", lambda: True)
     monkeypatch.setattr(
         discord_setup,
         "linger_status",
@@ -228,7 +230,7 @@ def test_invite_uses_only_required_bot_scope_and_permissions() -> None:
     assert "client_id=123" in url
     assert "bot+applications.commands" in url
     assert "integration_type=0" in url
-    assert "permissions=68608" in url
+    assert "permissions=84992" in url
 
 
 def test_setup_guide_is_precise_and_least_privilege() -> None:
@@ -237,10 +239,11 @@ def test_setup_guide_is_precise_and_least_privilege() -> None:
     assert guide["developer_portal"] == "https://discord.com/developers/applications"
     assert installation["context"] == "Guild Install"
     assert installation["scopes"] == ["bot", "applications.commands"]
-    assert installation["permissions_integer"] == 68608
+    assert installation["permissions_integer"] == 84992
     assert [value["name"] for value in installation["permissions"]] == [
         "View Channel",
         "Send Messages",
+        "Embed Links",
         "Read Message History",
     ]
     assert "Administrator" not in {value["name"] for value in installation["permissions"]}
@@ -265,3 +268,28 @@ def test_video_selection_is_preserved_across_pages() -> None:
     assert selected == {"0", "24", "25"}
     merge_video_page_selection(selected, video_page(videos, 0), ["24"])
     assert selected == {"24", "25"}
+
+
+def test_followup_omits_none_view_for_discord_webhook() -> None:
+    class Followup:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def send(self, **kwargs):
+            self.calls.append(kwargs)
+            return object()
+
+    class Interaction:
+        def __init__(self) -> None:
+            self.followup = Followup()
+
+    async def scenario() -> None:
+        interaction = Interaction()
+        embed = discord.Embed(title="Assignments")
+        await _send_followup_embed(interaction, embed, wait=True)
+        assert "view" not in interaction.followup.calls[0]
+        view = discord.ui.View()
+        await _send_followup_embed(interaction, embed, view=view, wait=True)
+        assert interaction.followup.calls[1]["view"] is view
+
+    asyncio.run(scenario())

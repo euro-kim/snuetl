@@ -323,11 +323,18 @@ class CanvasApiAdapter:
             if not isinstance(item, dict) or not item.get("name"):
                 continue
             remote_id = str(item.get("id") or item["name"])
+            submission_types = item.get("submission_types")
+            is_quiz = (
+                item.get("is_quiz_assignment") is True
+                or item.get("quiz_id") is not None
+                or (isinstance(submission_types, list) and "online_quiz" in submission_types)
+                or "/quizzes/" in str(item.get("html_url") or "")
+            )
             items.append(
                 ContentItem(
                     remote_id=remote_id,
                     course_id=course.remote_id,
-                    kind="assignment",
+                    kind="quiz" if is_quiz else "assignment",
                     title=str(item["name"]),
                     url=urljoin(f"{self.origin}/", str(item.get("html_url") or "")),
                     published_at=str(item.get("updated_at") or "") or None,

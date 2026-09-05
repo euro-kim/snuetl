@@ -21,13 +21,19 @@ from .cli_runtime import handle_cli_exception
 from .config import Config, DirectoryRoute, default_config_path, load_config, save_config
 from .credentials import load_credentials
 from .directory_manager import (
+    DirectoryPermissionReport,
+    configured_directory_permission_reports,
+    configured_video_directory,
     directory_migration_conflicts,
+    directory_permission_data,
     directory_routes_data,
     execute_directory_migration,
+    has_separate_video_directory,
     plan_directory_migration,
     remove_directory_route,
     repair_legacy_layout,
     resolve_cached_course_id,
+    set_video_directory,
     upsert_directory_route,
     validate_managed_root,
 )
@@ -44,7 +50,12 @@ from .profile import profile_lock
 from .puller import PullSummary, discover_pull_plan, execute_pull, plan_data
 from .query import execute_query
 from .routing import parse_remote_folder
-from .scheduler import discord_service_is_enabled, linger_status, timer_is_enabled
+from .scheduler import (
+    discord_service_is_active,
+    discord_service_is_enabled,
+    linger_status,
+    timer_is_enabled,
+)
 from .sql_shell import run_sql_shell
 from .state import StateStore
 from .syncer import synchronize
@@ -106,7 +117,7 @@ def _status(config: Config) -> int:
         return 0
     with StateStore(database_path) as store:
         courses, downloaded_files = store.counts()
-        remote_files, articles, assignments = store.catalog_counts()
+        remote_files, articles, assignments, quizzes = store.catalog_counts()
         last = store.last_run()
         if last is None:
             console.print("Last sync: never")
@@ -120,7 +131,7 @@ def _status(config: Config) -> int:
             )
         console.print(
             f"Catalog: {courses} active courses, {remote_files} remote files, "
-            f"{articles} articles, {assignments} assignments"
+            f"{articles} articles, {assignments} assignments, {quizzes} quizzes"
         )
         console.print(f"Downloaded: {downloaded_files} files tracked locally")
     return 0
@@ -181,6 +192,8 @@ def _status_data(config: Config) -> dict[str, object]:
         "saved_username": saved.username if saved else None,
         "state_dir": str(config.state_dir),
         "download_dir": str(config.download_dir),
+        "video_directory": str(configured_video_directory(config)),
+        "video_directory_separate": has_separate_video_directory(config),
         "headless": config.headless,
         "directory_routes": directory_routes_data(config),
         "last_sync": None,
@@ -189,10 +202,14 @@ def _status_data(config: Config) -> dict[str, object]:
         "articles": 0,
         "assignments": 0,
         "downloaded_files": 0,
+        "quizzes": 0,
         "discord": {
             "enabled": config.discord.enabled,
             "configured": config.discord.configured,
             "service_enabled": discord_service_is_enabled()
+            if platform.system() == "Linux"
+            else False,
+            "service_active": discord_service_is_active()
             if platform.system() == "Linux"
             else False,
         },
@@ -201,13 +218,14 @@ def _status_data(config: Config) -> dict[str, object]:
         return data
     with StateStore(config.database_path) as store:
         courses, downloaded = store.counts()
-        remote_files, articles, assignments = store.catalog_counts()
+        remote_files, articles, assignments, quizzes = store.catalog_counts()
         last = store.last_run()
         data.update(
             courses=courses,
             remote_files=remote_files,
             articles=articles,
             assignments=assignments,
+            quizzes=quizzes,
             downloaded_files=downloaded,
             last_sync=dict(last) if last is not None else None,
         )
@@ -274,7 +292,7 @@ def _capabilities() -> dict[str, object]:
         "version": __version__,
         "schema_version": "1",
         "commands": {
-            "inspect": ["courses", "files", "articles", "assignments"],
+            "inspect": ["courses", "files", "articles", "assignments", "quizzes"],
             "sql": {
                 "interactive": "snuetl sql",
                 "noninteractive": ["--execute", "--file", "stdin"],
@@ -287,6 +305,7 @@ def _capabilities() -> dict[str, object]:
                 "files",
                 "articles",
                 "assignments",
+                "quizzes",
                 "refresh",
                 "sync",
                 "pull",
@@ -325,6 +344,17 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
     machine = platform.machine() or "unknown"
     browser_ok, browser_detail = browser_available(config)
     saved = load_credentials(config)
+    permission_reports = configured_directory_permission_reports(config)
+    permissions_ok = all(report.safe for report in permission_reports)
+    permissions_detail = (
+        ", ".join(f"{report.path} ({report.mode:04o})" for report in permission_reports)
+        if permissions_ok
+        else " | ".join(
+            f"{report.path}: {'; '.join((*report.issues, *report.remediation))}"
+            for report in permission_reports
+            if not report.safe
+        )
+    )
     checks = [
         {"name": "configuration", "ok": path.exists(), "detail": str(path)},
         {
@@ -349,6 +379,11 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
             "detail": str(config.download_dir),
         },
         {
+            "name": "directory_permissions",
+            "ok": permissions_ok,
+            "detail": permissions_detail,
+        },
+        {
             "name": "automatic_relogin",
             "ok": saved is not None,
             "detail": saved.username if saved else "disabled",
@@ -370,7 +405,7 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
                 [
                     {
                         "name": "discord_service",
-                        "ok": discord_service_is_enabled(),
+                        "ok": discord_service_is_enabled() and discord_service_is_active(),
                         "detail": "user systemd service",
                         "optional": True,
                     },
@@ -413,7 +448,12 @@ def _run_discord_command(config: Config, args: argparse.Namespace) -> int:
         return 0
     if action == "status":
         data = discord_status(config)
-        ready = bool(data["configured"] and data["token_present"])
+        ready = bool(
+            data["configured"]
+            and data["token_present"]
+            and data["service_enabled"]
+            and data["service_active"]
+        )
         emit(envelope("discord status", data=data, ok=ready)) if args.json else console.print_json(
             data=data
         )
@@ -485,15 +525,68 @@ def _refresh_discord_directory_access(config: Config, config_path: Path) -> None
     )
 
 
+def _directory_permission_warnings(
+    reports: list[DirectoryPermissionReport],
+) -> list[dict[str, object]]:
+    warnings: list[dict[str, object]] = []
+    for report in reports:
+        if report.safe:
+            continue
+        warnings.append(
+            {
+                "code": "UNSAFE_DIRECTORY_PERMISSIONS",
+                "message": f"{report.path}: {'; '.join(report.issues)}",
+                "remediation": list(report.remediation),
+            }
+        )
+    return warnings
+
+
+def _print_directory_permissions(reports: list[DirectoryPermissionReport]) -> None:
+    for report in reports:
+        mode = f"{report.mode:04o}" if report.mode is not None else "missing"
+        if report.safe:
+            verb = "Secured" if report.changed else "Safe permissions"
+            previous = (
+                f" (changed from {report.previous_mode:04o})"
+                if report.changed and report.previous_mode is not None
+                else ""
+            )
+            console.print(
+                f"[green]✓[/green] {verb}: [dim]{report.path}[/dim] [green]{mode}[/green]{previous}"
+            )
+            continue
+        console.print(
+            f"[yellow]! Unsafe directory permissions:[/yellow] [dim]{report.path}[/dim] ({mode})"
+        )
+        for issue in report.issues:
+            console.print(f"  [yellow]•[/yellow] {issue}")
+        for remediation in report.remediation:
+            console.print(f"  Fix: {remediation}", markup=False, highlight=False)
+
+
 def _run_directory(config: Config, args: argparse.Namespace) -> int:
     operation = args.operation
-    if operation in {None, "list"}:
-        data = {
+    if args.use_default and operation != "videos":
+        raise ValueError("--default is only valid with 'snuetl directory videos'")
+    show_video = operation == "videos" and args.value is None and not args.use_default
+    if operation in {None, "list"} or show_video:
+        reports = configured_directory_permission_reports(config)
+        status = {
             "managed_root": str(config.download_dir),
+            "video_directory": str(configured_video_directory(config)),
+            "video_directory_separate": has_separate_video_directory(config),
             "automatic_migration": True,
             "routes": directory_routes_data(config),
+            "permissions_safe": all(report.safe for report in reports),
+            "permissions": [directory_permission_data(report) for report in reports],
         }
-        emit(envelope("directory", data=data)) if args.json else console.print_json(data=data)
+        warnings = _directory_permission_warnings(reports)
+        if args.json:
+            emit(envelope("directory", data=status, warnings=warnings))
+        else:
+            _print_directory_permissions(reports)
+            console.print_json(data=status)
         return 0
 
     config_path = (args.config or default_config_path()).expanduser().resolve()
@@ -505,6 +598,13 @@ def _run_directory(config: Config, args: argparse.Namespace) -> int:
             raise ValueError("directory set requires a destination path")
         root = validate_managed_root(Path(args.value))
         updated = replace(config, download_dir=root)
+        if configured_video_directory(updated) == root:
+            updated = set_video_directory(updated, root)
+    elif operation == "videos":
+        if args.value and args.use_default:
+            raise ValueError("provide a video path or --default, not both")
+        destination = config.download_dir if args.use_default else Path(str(args.value))
+        updated = set_video_directory(config, destination)
     elif operation == "bind":
         if not args.value:
             raise ValueError("directory bind requires a destination path")
@@ -530,12 +630,17 @@ def _run_directory(config: Config, args: argparse.Namespace) -> int:
         root = validate_managed_root(Path(operation))
         updated = replace(config, download_dir=root)
 
+    permission_reports = configured_directory_permission_reports(updated)
     entries = [] if args.no_migrate else plan_directory_migration(updated, updated.download_dir)
     conflicts = directory_migration_conflicts(entries)
     data: dict[str, object] = {
         "action": action,
         "managed_root": str(updated.download_dir),
         "routes": directory_routes_data(updated),
+        "video_directory": str(configured_video_directory(updated)),
+        "video_directory_separate": has_separate_video_directory(updated),
+        "permissions_safe": all(report.safe for report in permission_reports),
+        "permissions": [directory_permission_data(report) for report in permission_reports],
         "migration": {
             "automatic": not args.no_migrate,
             "planned": len(entries),
@@ -554,22 +659,30 @@ def _run_directory(config: Config, args: argparse.Namespace) -> int:
         ],
     }
     if conflicts:
+        warnings = _directory_permission_warnings(permission_reports)
         if args.json or args.dry_run:
-            emit(envelope("directory", data=data, ok=False)) if args.json else console.print_json(
-                data=data
-            )
+            if args.json:
+                emit(envelope("directory", data=data, ok=False, warnings=warnings))
+            else:
+                _print_directory_permissions(permission_reports)
+                console.print_json(data=data)
             return 3
         raise ValueError(
             "automatic migration stopped before moving anything: " + "; ".join(conflicts)
         )
     if args.dry_run:
-        emit(envelope("directory", data=data)) if args.json else console.print_json(data=data)
+        warnings = _directory_permission_warnings(permission_reports)
+        if args.json:
+            emit(envelope("directory", data=data, warnings=warnings))
+        else:
+            _print_directory_permissions(permission_reports)
+            console.print_json(data=data)
         return 0
 
+    permission_reports = configured_directory_permission_reports(updated, secure=True)
+    data["permissions_safe"] = all(report.safe for report in permission_reports)
+    data["permissions"] = [directory_permission_data(report) for report in permission_reports]
     summary = execute_directory_migration(updated, entries)
-    updated.download_dir.mkdir(parents=True, exist_ok=True)
-    for route in updated.directory_routes:
-        route.destination.mkdir(parents=True, exist_ok=True)
     save_config(updated, config_path)
     _refresh_discord_directory_access(updated, config_path)
     data["migration"] = {
@@ -577,9 +690,11 @@ def _run_directory(config: Config, args: argparse.Namespace) -> int:
         **asdict(summary),
         "conflicts": [],
     }
-    emit(
-        envelope("directory", data=data, ok=summary.failed == 0)
-    ) if args.json else console.print_json(data=data)
+    if args.json:
+        emit(envelope("directory", data=data, ok=summary.failed == 0))
+    else:
+        _print_directory_permissions(permission_reports)
+        console.print_json(data=data)
     return 4 if summary.failed else 0
 
 
@@ -907,11 +1022,13 @@ def main(argv: list[str] | None = None) -> int:
             table.add_column("Files", justify="right")
             table.add_column("Articles", justify="right")
             table.add_column("Assignments", justify="right")
+            table.add_column("Quizzes", justify="right")
             table.add_row(
                 str(summary.courses),
                 str(summary.files),
                 str(summary.articles),
                 str(summary.assignments),
+                str(summary.quizzes),
             )
             console.print(table)
             return 0
@@ -919,11 +1036,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.refresh:
                 summary = refresh_catalog(config, headless=_headless_choice(args, config))
                 LOGGER.info(
-                    "catalog refreshed courses=%d files=%d articles=%d assignments=%d",
+                    "catalog refreshed courses=%d files=%d articles=%d assignments=%d quizzes=%d",
                     summary.courses,
                     summary.files,
                     summary.articles,
                     summary.assignments,
+                    summary.quizzes,
                 )
             sql = _read_sql(args)
             if sql is None:
@@ -1012,7 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
             return 4 if summary.partial else 0
         if args.command == "directory":
             return _run_directory(config, args)
-        if args.command in {"courses", "files", "articles", "assignments"}:
+        if args.command in {"courses", "files", "articles", "assignments", "quizzes"}:
             result = inspect_catalog(
                 config,
                 kind=args.command,

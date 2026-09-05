@@ -58,6 +58,8 @@ def test_interactive_sql_shell_refresh_callback(tmp_path: Path, capsys) -> None:
         articles = 3
         assignments = 4
 
+        quizzes = 5
+
     commands = iter((".refresh", ".exit"))
     run_sql_shell(
         database,
@@ -65,4 +67,4 @@ def test_interactive_sql_shell_refresh_callback(tmp_path: Path, capsys) -> None:
         input_fn=lambda _prompt: next(commands),
     )
     assert called == [True]
-    assert "1 courses, 2 files, 3 articles, 4 assignments" in capsys.readouterr().out
+    assert "1 courses, 2 files, 3 articles, 4 assignments, 5 quizzes" in capsys.readouterr().out
