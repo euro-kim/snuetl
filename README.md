@@ -122,27 +122,37 @@ someone runs `snuetl sync` in the container.
 
 ### First deployment
 
-Create the local Compose configuration and its private bind directories:
+Run the guided Docker bootstrap from the repository root:
 
 ```bash
-cp .env.example .env
-mkdir -p docker-data/{config,state,downloads,videos}
-chmod 700 docker-data/{config,state,downloads,videos}
+./docker-setup.sh
 ```
 
-The repository already ignores `.env` and `docker-data/`. Confirm that `SNUETL_UID` and
-`SNUETL_GID` in `.env` match the Linux account that owns those directories:
+The script provides the complete host-side deployment workflow:
+
+- copies `.env.example` to `.env` only when `.env` does not already exist;
+- pauses while you review the container name, timezone, and persistent host paths;
+- corrects `SNUETL_UID` and `SNUETL_GID` to match the invoking login user;
+- safely creates each configured directory, repairing ownership with `sudo` only when
+  necessary and enforcing owner-only mode `0700`;
+- stops a previous Compose attempt without deleting bind-mounted data;
+- rebuilds with the latest base image and no stale build cache;
+- recreates the named container in detached mode and waits for a healthy supervisor.
+
+The repository ignores `.env` and the default `docker-data/` tree. Run the script as your
+normal login user, not with `sudo`; it requests elevated access itself if an absolute host
+path or stale root-owned directory needs repair. Existing configuration and downloaded
+content are preserved. The script intentionally does not run a global Docker cache prune,
+remove named volumes, or delete any configured host directory.
+
+The deployment requires standard rootful Docker on Linux. Rootless Docker and daemon-level
+`userns-remap` translate bind-mount ownership differently and are rejected before any
+directory is changed. Docker Desktop on macOS and Windows remains unsupported.
+
+After the script reports that the deployment is healthy, complete headless enrollment and
+configure Discord:
 
 ```bash
-id -u
-id -g
-```
-
-Start the container, complete headless enrollment in its terminal, and configure Discord:
-
-```bash
-docker compose up --build -d
-docker compose ps
 docker compose exec snuetl snuetl setup --headless
 docker compose exec snuetl snuetl discord
 docker compose exec snuetl snuetl doctor
@@ -172,12 +182,13 @@ the container as `/data/downloads`. The stable internal paths allow the image to
 rebuilt or moved without rewriting catalog records.
 
 The default repository-local paths are convenient for a first run. For a server, replace
-them with absolute host paths before enrollment. Compose does not expand a literal `~` in
-bind-mount values. After changing `.env`, rebuild for possible UID/GID changes and recreate
-the container while preserving the mounted data:
+them with absolute host paths before enrollment. The setup script rejects a literal `~`,
+environment-variable expansion, overlapping directories, repository ancestors, and unsafe
+top-level system paths before changing permissions. After changing `.env`, rerun the script;
+it rebuilds for possible UID/GID changes and recreates the container while preserving data:
 
 ```bash
-docker compose up --build -d --force-recreate
+./docker-setup.sh
 ```
 
 ### Terminal and operations
@@ -208,8 +219,7 @@ To deploy a reviewed source update, rebuild the immutable image rather than runn
 
 ```bash
 git pull --ff-only
-docker compose build --pull
-docker compose up -d
+./docker-setup.sh
 docker compose exec snuetl snuetl doctor
 ```
 
@@ -228,7 +238,7 @@ SNU account. For example:
 ```bash
 cp .env.example .env.alice
 # Edit SNUETL_CONTAINER_NAME and every SNUETL_*_DIR value in .env.alice.
-docker compose --env-file .env.alice -p snuetl-alice up --build -d
+./docker-setup.sh --env-file .env.alice --project-name snuetl-alice
 docker compose --env-file .env.alice -p snuetl-alice exec snuetl \
   snuetl setup --headless
 ```

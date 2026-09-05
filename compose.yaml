@@ -22,15 +22,23 @@ services:
       - type: bind
         source: ${SNUETL_CONFIG_DIR:-./docker-data/config}
         target: /home/snuetl/.config/snuetl
+        bind:
+          create_host_path: false
       - type: bind
         source: ${SNUETL_STATE_DIR:-./docker-data/state}
         target: /home/snuetl/.local/state/snuetl
+        bind:
+          create_host_path: false
       - type: bind
         source: ${SNUETL_DOWNLOAD_DIR:-./docker-data/downloads}
         target: /data/downloads
+        bind:
+          create_host_path: false
       - type: bind
         source: ${SNUETL_VIDEO_DIR:-./docker-data/videos}
         target: /data/videos
+        bind:
+          create_host_path: false
     tmpfs:
       - /tmp:size=1g,mode=1777
       - /run:size=16m,mode=1777

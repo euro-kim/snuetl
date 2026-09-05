@@ -12,3 +12,4 @@ docker-data
 build
 dist
 tests
+docker-setup.sh
