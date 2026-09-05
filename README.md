@@ -127,6 +127,50 @@ token is deliberately separate from TOML so it does not appear beside ordinary
 configuration, but both the token and optional SNU credential file are plaintext secrets
 and must be protected accordingly.
 
+## Multiple users on one Linux server
+
+Use one Linux user account for each independent SNU eTL account. A user's `snuetl`
+installation is one isolated deployment containing that user's configuration, saved SNU
+credentials, trusted-browser profile, SQLite catalog, download directory, Discord token,
+and systemd user services. Do not share any of these files between users.
+
+Install and enroll `snuetl` while logged in as each user so its files are created under
+that user's home directory and SNU trusts the browser profile on the server:
+
+```bash
+# Run separately in each user's login session.
+./setup.sh
+snuetl setup --headless
+snuetl discord
+```
+
+Create a separate Discord application and bot token for every Linux user. The bots may
+join the same Discord server, but bind each one to a separate private channel, such as
+`#snuetl-alice` and `#snuetl-bob`. Grant each bot access only to its own channel. Do not
+reuse one bot token across users or daemon processes.
+
+For unattended service after logout, an administrator must enable lingering separately
+for each Linux account:
+
+```bash
+sudo loginctl enable-linger alice
+sudo loginctl enable-linger bob
+```
+
+The values in `discord.owner_ids` are an allowlist for one deployment. Adding several
+Discord owners gives all of them control over the same SNU account and files; it does not
+map each Discord user to a separate SNU account.
+
+Multiple independent deployments under a single Linux user are not supported. Although
+`--config` and `general.state_dir` can separate most files, the generated systemd user
+units have singleton names (`snuetl.service`, `snuetl.timer`, and
+`snuetl-discord.service`) and a second setup would replace the first user's units. Create
+another Linux user instead.
+
+Keep each download root private by default. If users intentionally need common output,
+export or copy selected files to a separately managed shared directory with an
+appropriate Unix group; do not point multiple deployments at the same writable download
+root or share their state directories.
 
 ## Commands
 
