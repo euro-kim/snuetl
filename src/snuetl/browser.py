@@ -42,6 +42,11 @@ PASSWORD_CHANGE_REQUIRED_TEXT = re.compile(
     r"password.{0,40}(expired|must\s+be\s+changed|change\s+required)",
     re.IGNORECASE | re.DOTALL,
 )
+SSO_SESSION_EXPIRED_TEXT = re.compile(
+    r"\bES0024\b|통합인증\s*데이터.{0,40}만료|인증\s*세션.{0,20}만료|"
+    r"authentication\s+(?:data|session).{0,40}(?:expired|invalid)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _playwright() -> Any:
@@ -195,6 +200,53 @@ def _on_sso(page: Any) -> bool:
         if any(host == marker or host.endswith(f".{marker}") for marker in LOGIN_URL_MARKERS):
             return True
     return False
+
+
+def _sso_session_expired(page: Any) -> bool:
+    """Return whether NSSO rejected a restored, stale login transaction."""
+    for scope in _document_scopes(page):
+        try:
+            host = (urlsplit(scope.url).hostname or "").lower()
+            if not any(
+                host == marker or host.endswith(f".{marker}") for marker in LOGIN_URL_MARKERS
+            ):
+                continue
+            body = scope.locator("body").inner_text() or ""
+            if SSO_SESSION_EXPIRED_TEXT.search(body):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _clear_snu_session_cookies(context: Any) -> int:
+    """Drop expired browser-session cookies without losing trusted-device cookies."""
+    cleared = 0
+    try:
+        cookies = context.cookies()
+    except Exception:
+        return 0
+    for cookie in cookies:
+        domain = str(cookie.get("domain", ""))
+        host = domain.lstrip(".").lower()
+        if not (host == "snu.ac.kr" or host.endswith(".snu.ac.kr")):
+            continue
+        try:
+            expires = float(cookie.get("expires", -1))
+        except (TypeError, ValueError):
+            continue
+        if expires >= 0:
+            continue
+        try:
+            context.clear_cookies(
+                name=str(cookie.get("name", "")),
+                domain=domain,
+                path=str(cookie.get("path", "/")),
+            )
+            cleared += 1
+        except Exception:
+            continue
+    return cleared
 
 
 def _login_was_rejected(page: Any) -> bool:
@@ -519,11 +571,22 @@ def _login_page(
         page.goto(config.base_url, wait_until="domcontentloaded")
     form_deadline = time.monotonic() + min(config.login_timeout_seconds, 45)
     login_fields = None
+    session_recovery_attempted = False
     while time.monotonic() < form_deadline:
         if browser_looks_authenticated(context, page):
             persist_auth_state(context, config, page.url)
             LOGGER.info("browser profile is already authenticated")
             return page.url
+        if not session_recovery_attempted and _sso_session_expired(page):
+            session_recovery_attempted = True
+            cleared = _clear_snu_session_cookies(context)
+            LOGGER.warning(
+                "SNU rejected an expired authentication session; cleared %d stale "
+                "session cookie(s) and restarted login",
+                cleared,
+            )
+            page.goto(config.base_url, wait_until="domcontentloaded")
+            continue
         login_fields = _find_login_fields(page)
         if login_fields is not None:
             break

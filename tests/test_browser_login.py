@@ -3,9 +3,11 @@ import re
 import pytest
 
 from snuetl.browser import (
+    _clear_snu_session_cookies,
     _find_login_fields,
     _handle_password_change_prompt,
     _set_trusted_browser,
+    _sso_session_expired,
     _submit_login,
     _submit_two_factor_code,
 )
@@ -160,6 +162,60 @@ def test_login_fields_can_be_discovered_in_an_embedded_sso_frame() -> None:
     page.frames = [main, frame]
 
     assert _find_login_fields(page) == (frame, username, password)
+
+
+def test_expired_nsso_transaction_is_recognized() -> None:
+    page = _LoginScope(
+        {"body": (_Item(text="인증세션이 만료되었습니다.\nES0024"),)},
+        url="https://nsso.snu.ac.kr/sso/usr/login/link",
+    )
+
+    assert _sso_session_expired(page) is True
+
+
+def test_only_snu_session_cookies_are_cleared() -> None:
+    class Context:
+        cleared: list[dict[str, str]] = []
+
+        @staticmethod
+        def cookies():
+            return [
+                {
+                    "name": "JSESSIONID",
+                    "domain": "nsso.snu.ac.kr",
+                    "path": "/sso",
+                    "expires": -1,
+                },
+                {
+                    "name": "PHPSESSID",
+                    "domain": "etl.snu.ac.kr",
+                    "path": "/",
+                    "expires": -1,
+                },
+                {
+                    "name": "bpl",
+                    "domain": "nsso.snu.ac.kr",
+                    "path": "/sso",
+                    "expires": 2_000_000_000,
+                },
+                {
+                    "name": "session",
+                    "domain": "example.com",
+                    "path": "/",
+                    "expires": -1,
+                },
+            ]
+
+        def clear_cookies(self, **kwargs: str) -> None:
+            self.cleared.append(kwargs)
+
+    context = Context()
+
+    assert _clear_snu_session_cookies(context) == 2
+    assert context.cleared == [
+        {"name": "JSESSIONID", "domain": "nsso.snu.ac.kr", "path": "/sso"},
+        {"name": "PHPSESSID", "domain": "etl.snu.ac.kr", "path": "/"},
+    ]
 
 
 def test_current_english_login_and_verification_controls_are_supported() -> None:
