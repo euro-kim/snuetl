@@ -27,9 +27,12 @@ from .discord_presenter import (
     notice_embed,
     progress_job_embed,
     pull_confirmation_embed,
+    queue_receipt_embed,
     queued_job_embed,
+    request_summary,
     selection_embed,
     status_embed,
+    video_review_embed,
 )
 from .discord_ui import merge_video_page_selection, video_page
 from .logging_utils import redact, redacted_exc_info
@@ -500,11 +503,7 @@ def run_discord_bot(config: Config) -> None:
         job = await enqueue(interaction, command, {})
         await _send_followup_embed(
             interaction,
-            embed=notice_embed(
-                f"{command.title()} queued",
-                f"Job `{job.job_id}` was added to the background queue. Follow the new channel message for live progress.",
-                tone="success",
-            ),
+            embed=queue_receipt_embed(job),
             ephemeral=True,
         )
 
@@ -650,10 +649,7 @@ def run_discord_bot(config: Config) -> None:
                 if not await owns_control(interaction, self.owner_id):
                     return
                 await interaction.response.send_message(
-                    embed=notice_embed(
-                        "Video selection",
-                        f"Selected **{len(self.selected)}** of **{len(self.videos)}** videos.",
-                    ),
+                    embed=video_review_embed(self.videos, self.selected, self.arguments),
                     ephemeral=True,
                 )
 
@@ -686,11 +682,7 @@ def run_discord_bot(config: Config) -> None:
                 self.stop()
                 await interaction.edit_original_response(
                     content=None,
-                    embed=notice_embed(
-                        "Video pull queued",
-                        f"Queued job `{job.job_id}` with **{len(self.selected)}** selected videos. Follow the channel message for progress.",
-                        tone="success",
-                    ),
+                    embed=queue_receipt_embed(job),
                     view=None,
                 )
 
@@ -713,7 +705,9 @@ def run_discord_bot(config: Config) -> None:
         async def render(self, interaction: discord.Interaction) -> None:
             await interaction.response.edit_message(
                 content=None,
-                embed=selection_embed(len(self.videos), self.page, len(self.selected)),
+                embed=selection_embed(
+                    len(self.videos), self.page, len(self.selected), self.arguments
+                ),
                 view=self,
             )
 
@@ -734,11 +728,7 @@ def run_discord_bot(config: Config) -> None:
             self.stop()
             await interaction.edit_original_response(
                 content=None,
-                embed=notice_embed(
-                    "Pull queued",
-                    f"Job `{job.job_id}` was queued. Follow the channel message for progress.",
-                    tone="success",
-                ),
+                embed=queue_receipt_embed(job),
                 view=None,
             )
 
@@ -803,18 +793,36 @@ def run_discord_bot(config: Config) -> None:
             )
             videos = list(plan_data(plan)["videos"])
             if not videos:
+                preview = DiscordJob(
+                    "preview",
+                    "pull",
+                    arguments,
+                    interaction.user.id,
+                    "queued",
+                    "",
+                )
+                empty = notice_embed(
+                    "No videos found",
+                    "No selectable, published videos matched the requested filters. Nothing was "
+                    "queued or downloaded. Try removing the course or semester filter, or run "
+                    "`/snuetl refresh` before searching again.",
+                    tone="warning",
+                )
+                empty.add_field(
+                    name="Requested filters",
+                    value=request_summary(preview),
+                    inline=False,
+                )
                 await _send_followup_embed(
                     interaction,
-                    embed=notice_embed(
-                        "No videos found", "No selectable videos matched those filters."
-                    ),
+                    embed=empty,
                     ephemeral=True,
                 )
                 return
             view = VideoSelectionView(arguments, videos, interaction.user.id)
             view.message = await _send_followup_embed(
                 interaction,
-                embed=selection_embed(len(videos), 0, 0),
+                embed=selection_embed(len(videos), 0, 0, arguments),
                 view=view,
                 ephemeral=True,
                 wait=True,
@@ -833,11 +841,7 @@ def run_discord_bot(config: Config) -> None:
         job = await enqueue(interaction, "pull", arguments)
         await _send_followup_embed(
             interaction,
-            embed=notice_embed(
-                "Pull queued",
-                f"Job `{job.job_id}` was added to the background queue. Follow the channel message for progress.",
-                tone="success",
-            ),
+            embed=queue_receipt_embed(job),
             ephemeral=True,
         )
 
@@ -858,10 +862,15 @@ def run_discord_bot(config: Config) -> None:
             accepted = broker is not None and broker.submit(str(self.code))
             await interaction.response.send_message(
                 embed=notice_embed(
-                    "Verification code submitted" if accepted else "Login request expired",
-                    "The background login will continue."
-                    if accepted
-                    else "Run `/snuetl login` again.",
+                    "Verification code forwarded" if accepted else "Login request expired",
+                    (
+                        f"The code was delivered to login job `{self.job_id}` and was not "
+                        "written to disk. Watch the channel job card for the final authentication "
+                        "result; a rejected code may prompt for another attempt."
+                        if accepted
+                        else f"Job `{self.job_id}` is no longer waiting for a code. Check "
+                        "`/snuetl jobs` for its final status, then run `/snuetl login` again if needed."
+                    ),
                     tone="success" if accepted else "warning",
                 ),
                 ephemeral=True,
@@ -899,13 +908,30 @@ def run_discord_bot(config: Config) -> None:
         bot.brokers[job.job_id] = VerificationBroker(config.login_timeout_seconds)
         await post_job(interaction, job)
         view = LoginCodeView(job.job_id, interaction.user.id)
+        login_embed = notice_embed(
+            "SNU login started",
+            "The background worker is signing in with the saved SNU ID and password. SNU will "
+            f"send a one-time code by **{method}**. When it arrives, use the button below; the "
+            "code is forwarded directly to the waiting login and is not stored.",
+            tone="success",
+        )
+        login_embed.add_field(name="Job ID", value=f"`{job.job_id}`", inline=True)
+        login_embed.add_field(
+            name="Time limit",
+            value=f"Submit the code within **{config.login_timeout_seconds:g} seconds**.",
+            inline=True,
+        )
+        login_embed.add_field(
+            name="What happens next",
+            value=(
+                "The channel job card will show whether authentication succeeded. If no code "
+                "arrives, verify the saved email/phone in SNU and run `/snuetl login` again."
+            ),
+            inline=False,
+        )
         view.message = await _send_followup_embed(
             interaction,
-            embed=notice_embed(
-                "Login started",
-                f"Queued job `{job.job_id}` using **{method}** verification. When the code arrives, tap the button below.",
-                tone="success",
-            ),
+            embed=login_embed,
             view=view,
             ephemeral=True,
             wait=True,
@@ -928,17 +954,34 @@ def run_discord_bot(config: Config) -> None:
     async def cancel_command(interaction: discord.Interaction, job_id: str) -> None:
         if not await guard(interaction):
             return
-        changed = bot.queue.cancel(job_id.strip())
-        await interaction.response.send_message(
-            embed=notice_embed(
-                "Cancellation requested" if changed else "Job not found",
-                (
-                    f"Asked job `{job_id.strip()}` to stop safely."
-                    if changed
-                    else "That job is not queued or running. Use `/snuetl jobs` to see recent jobs."
-                ),
-                tone="warning" if changed else "error",
+        normalized_id = job_id.strip()
+        with StateStore(config.database_path) as store:
+            before = store.get_discord_job(normalized_id)
+        changed = bot.queue.cancel(normalized_id)
+        cancel_embed = notice_embed(
+            "Cancellation requested" if changed else "Job not found",
+            (
+                "The worker will stop at its next safe checkpoint. Files already completed are "
+                "kept, and an in-progress atomic write will not replace its destination."
+                if changed
+                else "That ID is not queued or running. It may already be complete, cancelled, "
+                "or outside retained history. Use `/snuetl jobs` to see recent jobs."
             ),
+            tone="warning" if changed else "error",
+        )
+        cancel_embed.add_field(name="Job ID", value=f"`{normalized_id}`", inline=True)
+        if before is not None:
+            cancel_embed.add_field(
+                name="Job",
+                value=f"**{before.command.title()}** · was **{before.status.replace('_', ' ')}**",
+                inline=True,
+            )
+            if before.progress:
+                cancel_embed.add_field(
+                    name="Last activity", value=str(redact(before.progress))[:700], inline=False
+                )
+        await interaction.response.send_message(
+            embed=cancel_embed,
             ephemeral=True,
         )
 

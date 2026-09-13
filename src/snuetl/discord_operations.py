@@ -43,6 +43,9 @@ def status_data(config: Config) -> dict[str, object]:
         "video_directory_separate": has_separate_video_directory(config),
         "headless": True,
         "last_sync": None,
+        "catalog_refreshed_at": None,
+        "active_jobs": 0,
+        "queued_jobs": 0,
         "courses": 0,
         "remote_files": 0,
         "articles": 0,
@@ -67,6 +70,16 @@ def status_data(config: Config) -> dict[str, object]:
         courses, downloaded = store.counts()
         remote_files, articles, assignments, quizzes = store.catalog_counts()
         last = store.last_run()
+        refreshed = store.db.execute(
+            "SELECT MAX(refreshed_at) AS refreshed_at FROM catalog_refreshes"
+        ).fetchone()
+        job_counts = store.db.execute(
+            """SELECT
+                 SUM(CASE WHEN status IN ('running', 'cancel_requested') THEN 1 ELSE 0 END)
+                   AS active_jobs,
+                 SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS queued_jobs
+               FROM discord_jobs"""
+        ).fetchone()
         data.update(
             courses=courses,
             remote_files=remote_files,
@@ -75,8 +88,18 @@ def status_data(config: Config) -> dict[str, object]:
             quizzes=quizzes,
             downloaded_files=downloaded,
             last_sync=dict(last) if last is not None else None,
+            catalog_refreshed_at=refreshed["refreshed_at"] if refreshed is not None else None,
+            active_jobs=_number_or_zero(job_counts["active_jobs"]),
+            queued_jobs=_number_or_zero(job_counts["queued_jobs"]),
         )
     return data
+
+
+def _number_or_zero(value: object) -> int:
+    try:
+        return int(str(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def doctor_data(config: Config, config_path: Path | None = None) -> dict[str, object]:
@@ -168,6 +191,9 @@ def catalog_rows(config: Config, kind: str, course: str | None = None) -> list[d
                     else None,
                     "course_id": course_value.remote_id,
                     "course": course_value.display_name,
+                    "course_code": course_value.course_code,
+                    "starts_at": course_value.starts_at,
+                    "ends_at": course_value.ends_at,
                 }
             )
     elif kind == "files":
@@ -179,6 +205,8 @@ def catalog_rows(config: Config, kind: str, course: str | None = None) -> list[d
                     "name": remote_value.name,
                     "path": remote_value.display_path,
                     "size_bytes": remote_value.size,
+                    "updated_at": remote_value.updated_at,
+                    "content_type": remote_value.content_type,
                 }
             )
     else:
@@ -191,6 +219,7 @@ def catalog_rows(config: Config, kind: str, course: str | None = None) -> list[d
                     "content_type": item_value.kind,
                     "due_at": item_value.due_at,
                     "published_at": item_value.published_at,
+                    "updated_at": item_value.updated_at,
                 }
             )
     return rows
@@ -206,10 +235,10 @@ def execute_job(
 ) -> dict[str, object]:
     config = replace(config, headless=True)
     if command == "sync":
-        progress("Synchronizing course files…")
+        progress(f"Starting file synchronization into {config.download_dir}…")
         return asdict(synchronize(config, headless=True, progress=progress))
     if command == "refresh":
-        progress("Refreshing the complete catalog…")
+        progress("Refreshing courses, files, articles, assignments, quizzes, and videos…")
         return asdict(refresh_catalog(config, headless=True, progress=progress))
     if command == "login":
         saved = load_credentials(config)
@@ -217,7 +246,9 @@ def execute_job(
             raise RuntimeError("Saved SNU credentials are required; run snuetl login locally")
         if login_callbacks is None:
             raise RuntimeError("Discord verification broker is unavailable")
-        progress("Signing in with the saved SNU credentials…")
+        progress(
+            f"Signing in with saved credentials; waiting for {login_callbacks.method} verification…"
+        )
         landing = interactive_login(
             config,
             saved.username,
@@ -237,7 +268,15 @@ def execute_job(
     kinds = ("files", "articles", "syllabus") if kind == "all" else (kind,)
     course = str(arguments.get("course") or "").strip()
     semester = str(arguments.get("semester") or "").strip()
-    progress("Discovering pull candidates…")
+    filters = ", ".join(
+        value
+        for value in (
+            f"content={kind}",
+            f"course={course}" if course else "all courses",
+            f"semester={semester}" if semester else "all semesters",
+        )
+    )
+    progress(f"Discovering pull candidates ({filters})…")
     plan = discover_pull_plan(
         config,
         kinds,
@@ -261,6 +300,13 @@ def execute_job(
         plan = replace(plan, selected_video_ids=selected_ids)
     elif kind == "videos":
         raise ValueError("video selection is required before queueing a Discord pull")
+    planned = plan_data(plan)
+    progress(
+        "Pull plan ready: "
+        f"{planned['courses']} course(s), {planned['files']} file(s), "
+        f"{planned['articles']} article(s), {planned['syllabus_files']} syllabus file(s), "
+        f"{planned['video_items']} video(s)."
+    )
     root = validate_managed_root(config.download_dir)
     repair_legacy_layout(root)
     summary = execute_pull(

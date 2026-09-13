@@ -268,12 +268,18 @@ async def _claim_binding(token: str, application_id: int, code: str) -> tuple[in
     async def claim(interaction: discord.Interaction, code: str) -> None:
         if interaction.guild_id is None or interaction.channel_id is None:
             await interaction.response.send_message(
-                "Claims must be made in a server channel.", ephemeral=True
+                "This installation can only be claimed from a standard server text channel. "
+                "Direct messages do not provide a server/channel boundary; return to the intended "
+                "private channel and run `/snuetl claim` there.",
+                ephemeral=True,
             )
             return
         if not secrets.compare_digest(code.strip(), claim_code):
             await interaction.response.send_message(
-                "That claim code is invalid or expired.", ephemeral=True
+                "That one-time claim code is invalid or expired. Codes are case-sensitive and "
+                "valid only for the current `snuetl discord` setup session; copy the newest code "
+                "from the terminal and retry.",
+                ephemeral=True,
             )
             return
         channel = interaction.channel
@@ -301,7 +307,10 @@ async def _claim_binding(token: str, application_id: int, code: str) -> tuple[in
             return
         claimed.set_result((interaction.guild_id, interaction.channel_id, interaction.user.id))
         await interaction.response.send_message(
-            "This channel is now bound to snuetl.", ephemeral=True
+            "This channel is now bound to snuetl, and you are its first authorized owner. "
+            "Finish the terminal setup, wait for command registration, then run `/snuetl doctor` "
+            "here to verify browser, authentication, storage, and service readiness.",
+            ephemeral=True,
         )
 
     claim_code = code

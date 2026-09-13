@@ -227,7 +227,9 @@ still be waiting for initial setup or Discord pairing; use `snuetl doctor` and
 ### Updating a Docker deployment
 
 The package is baked into the read-only image, so do not run `snuetl update` through
-`docker compose exec`. Update the host checkout and container with the dedicated script:
+`docker compose exec`. That command now reports the host-side update instruction instead
+of attempting an in-container package change. Update an existing container in place from
+the host checkout with the dedicated script:
 
 ```bash
 ./docker-update.sh
@@ -240,6 +242,13 @@ delegates path checks, a fresh no-cache image build, detached container recreati
 reporting, and health verification to `docker-setup.sh`. The new image is built before the
 current container is stopped, so a build failure leaves the running deployment untouched.
 All four bind-mounted data directories are preserved.
+
+After the replacement is healthy, refresh SNU authentication with the corrected login
+handling if the old container failed on the NSSO redirect:
+
+```bash
+docker compose exec snuetl snuetl login --headless
+```
 
 For unattended operation after reviewing the remote and for rebuilding an instance that
 already has the current source revision:

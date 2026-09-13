@@ -2,18 +2,29 @@ import re
 
 import pytest
 
-from snuetl.browser import _handle_password_change_prompt, _set_trusted_browser
+from snuetl.browser import (
+    _find_login_fields,
+    _handle_password_change_prompt,
+    _set_trusted_browser,
+    _submit_login,
+    _submit_two_factor_code,
+)
 from snuetl.errors import AuthenticationRequired
 
 
 class _Item:
-    def __init__(self, *, text: str = "", checked: bool = False) -> None:
+    def __init__(
+        self, *, text: str = "", checked: bool = False, visible: bool = True
+    ) -> None:
         self.text = text
         self.checked = checked
+        self.visible = visible
         self.clicked = False
+        self.filled = ""
+        self.pressed = ""
 
     def is_visible(self) -> bool:
-        return True
+        return self.visible
 
     def inner_text(self) -> str:
         return self.text
@@ -30,6 +41,12 @@ class _Item:
     def is_checked(self) -> bool:
         return self.checked
 
+    def fill(self, value: str) -> None:
+        self.filled = value
+
+    def press(self, value: str) -> None:
+        self.pressed = value
+
 
 class _Items:
     def __init__(self, *items: _Item) -> None:
@@ -43,6 +60,29 @@ class _Items:
 
     def inner_text(self) -> str:
         return self.items[0].inner_text()
+
+    def filter(self, **_kwargs) -> "_Items":
+        return self
+
+
+class _LoginScope:
+    def __init__(self, selectors=None, roles=None, *, url: str = "") -> None:
+        self.selectors = selectors or {}
+        self.roles = roles or {}
+        self.url = url
+
+    def locator(self, selector: str) -> _Items:
+        return _Items(*self.selectors.get(selector, ()))
+
+    def get_by_role(self, role: str, name=None) -> _Items:
+        candidates = self.roles.get(role, ())
+        if name is None:
+            return _Items(*candidates)
+        return _Items(*(item for item in candidates if name.search(item.text)))
+
+    def get_by_text(self, name, exact: bool = False) -> _Items:
+        candidates = self.roles.get("text", ())
+        return _Items(*(item for item in candidates if name.search(item.text)))
 
 
 class _PasswordPage:
@@ -87,3 +127,52 @@ def test_trusted_browser_can_be_explicitly_disabled() -> None:
 
     assert _set_trusted_browser(Page(), object(), False) is True
     assert checkbox.checked is False
+
+
+def test_current_snu_duplicate_language_fields_choose_visible_pair() -> None:
+    tab = _Item(text="ID / PW")
+    username = _Item()
+    password = _Item()
+    scope = _LoginScope(
+        {
+            "#tab-4": (_Item(text="아이디", visible=False), tab),
+            "#login_id": (_Item(visible=False), username),
+            "#login_pwd": (_Item(visible=False), password),
+        }
+    )
+
+    result = _find_login_fields(scope)
+
+    assert result == (scope, username, password)
+    assert tab.clicked is True
+
+
+def test_login_fields_can_be_discovered_in_an_embedded_sso_frame() -> None:
+    username = _Item()
+    password = _Item()
+    main = _LoginScope(url="https://etl.snu.ac.kr/login")
+    frame = _LoginScope(
+        {"#login_id": (username,), "#login_pwd": (password,)},
+        url="https://nsso.snu.ac.kr/sso/login",
+    )
+    page = _LoginScope(url=main.url)
+    page.main_frame = main
+    page.frames = [main, frame]
+
+    assert _find_login_fields(page) == (frame, username, password)
+
+
+def test_current_english_login_and_verification_controls_are_supported() -> None:
+    password = _Item()
+    sign_in = _Item(text="Sign in")
+    scope = _LoginScope(roles={"button": (sign_in,)})
+    _submit_login(scope, password)
+    assert sign_in.clicked is True
+    assert password.pressed == ""
+
+    code = _Item()
+    verify = _Item(text="Verify")
+    scope = _LoginScope({"#id_crtfc_no": (code,)}, {"button": (verify,)})
+    _submit_two_factor_code(scope, _LoginScope(), lambda: "123456")
+    assert code.filled == "123456"
+    assert verify.clicked is True

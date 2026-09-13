@@ -3,6 +3,8 @@ from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from snuetl import cli
 from snuetl.cli import main
 from snuetl.config import load_config, save_config
@@ -97,6 +99,17 @@ def test_headless_command_persists_default(tmp_path: Path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["data"] == {"headless": False, "browser_mode": "visible"}
     assert load_config(path).headless is False
+
+
+def test_update_inside_container_points_to_host_updater(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("SNUETL_RUNTIME", "container")
+    monkeypatch.setattr(cli, "update_self", lambda: pytest.fail("must not update in container"))
+
+    assert main(["update", "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "COMMAND_FAILED"
+    assert "docker-update.sh" in payload["error"]["message"]
 
 
 def test_directory_parser_supports_detailed_binding() -> None:

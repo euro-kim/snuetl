@@ -19,13 +19,17 @@ from .profile import profile_lock
 LOGGER = logging.getLogger(__name__)
 
 LOGIN_URL_MARKERS = ("sso.snu.ac.kr", "nsso.snu.ac.kr")
-LOGIN_TEXT = re.compile(r"^(아이디|ID)$", re.IGNORECASE)
+LOGIN_TEXT = re.compile(
+    r"^\s*(?:아이디(?:\s*/?\s*(?:비밀번호|PW))?|ID(?:\s*/\s*(?:PW|PASSWORD))?)\s*$",
+    re.IGNORECASE,
+)
 TWO_FACTOR_TEXT = re.compile(
     r"추가\s*인증|additional\s+(verification|authentication)", re.IGNORECASE
 )
 TRUST_TEXT = re.compile(
     r"이\s*브라우저에서\s*추가\s*인증\s*사용\s*안함|"
-    r"(do not|don't)\s+(use|require).*(verification|authentication).*(browser|device)",
+    r"(do not|don't)\s+(use|require).*(verification|authentication).*(browser|device)|"
+    r"trust\s+this\s+(browser|device)",
     re.IGNORECASE,
 )
 PASSWORD_CHANGE_LATER_TEXT = re.compile(
@@ -151,13 +155,46 @@ def _first_visible(locator: Any) -> Any | None:
     return None
 
 
-def _visible_password_field(page: Any) -> Any | None:
-    return _first_visible(page.locator("input[type='password']"))
+def _document_scopes(page: Any) -> list[Any]:
+    """Return the main document and any frames that can own an SSO form."""
+    scopes = [page]
+    try:
+        main_frame = page.main_frame
+        for frame in page.frames:
+            if frame is not main_frame:
+                scopes.append(frame)
+    except Exception:
+        pass
+    return scopes
+
+
+def _visible_password_field(scope: Any) -> Any | None:
+    selectors = (
+        "#login_pwd",
+        "input[name='login_pwd']",
+        "input[autocomplete='current-password']",
+        "input[name='password']",
+        "input[name='passwd']",
+        "input[id*='password' i]",
+        "input[id*='passwd' i]",
+        "input[type='password']",
+    )
+    for selector in selectors:
+        item = _first_visible(scope.locator(selector))
+        if item is not None:
+            return item
+    return None
 
 
 def _on_sso(page: Any) -> bool:
-    host = (urlsplit(page.url).hostname or "").lower()
-    return any(marker in host for marker in LOGIN_URL_MARKERS)
+    for scope in _document_scopes(page):
+        try:
+            host = (urlsplit(scope.url).hostname or "").lower()
+        except Exception:
+            continue
+        if any(host == marker or host.endswith(f".{marker}") for marker in LOGIN_URL_MARKERS):
+            return True
+    return False
 
 
 def _login_was_rejected(page: Any) -> bool:
@@ -166,25 +203,29 @@ def _login_was_rejected(page: Any) -> bool:
         r"incorrect|invalid\s+(id|password|credentials)|login\s+failed",
         re.IGNORECASE | re.DOTALL,
     )
-    candidates = page.locator(
-        "[role='alert'], .error, .error_msg, .error_txt, .alert, .validation-message"
-    )
-    try:
-        for index in range(candidates.count()):
-            item = candidates.nth(index)
-            if item.is_visible() and pattern.search(item.inner_text() or ""):
-                return True
-    except Exception:
-        return False
+    for scope in _document_scopes(page):
+        candidates = scope.locator(
+            "[role='alert'], .error, .error_msg, .error_txt, .alert, .validation-message"
+        )
+        try:
+            for index in range(candidates.count()):
+                item = candidates.nth(index)
+                if item.is_visible() and pattern.search(item.inner_text() or ""):
+                    return True
+        except Exception:
+            continue
     return False
 
 
-def _select_id_tab(page: Any) -> bool:
+def _select_id_tab(scope: Any) -> bool:
     candidates = [
-        page.locator("#tab-4"),
-        page.get_by_role("tab", name=LOGIN_TEXT),
-        page.get_by_text(LOGIN_TEXT, exact=True),
-        page.locator("a, button, [role='tab']").filter(has_text=LOGIN_TEXT),
+        scope.locator("#tab-4"),
+        scope.locator("[data-tab='tab-4']"),
+        scope.get_by_role("tab", name=LOGIN_TEXT),
+        scope.get_by_role("button", name=LOGIN_TEXT),
+        scope.get_by_role("link", name=LOGIN_TEXT),
+        scope.get_by_text(LOGIN_TEXT, exact=True),
+        scope.locator("a, button, [role='tab']").filter(has_text=LOGIN_TEXT),
     ]
     for candidate in candidates:
         item = _first_visible(candidate)
@@ -197,63 +238,98 @@ def _select_id_tab(page: Any) -> bool:
     return False
 
 
-def _find_username_field(page: Any) -> Any | None:
+def _find_username_field(scope: Any) -> Any | None:
     selectors = (
         "#login_id",
+        "input[name='login_id']",
         "input[autocomplete='username']",
         "input[placeholder*='아이디']",
+        "input[placeholder*='Enter ID' i]",
+        "input[title='아이디']",
+        "input[title='ID' i]",
         "input[name='userId']",
+        "input[name='userid' i]",
+        "input[name='user_id' i]",
         "input[name='username']",
         "input[id*='userId']",
         "input[id*='username']",
         "input[type='text']",
     )
     for selector in selectors:
-        item = _first_visible(page.locator(selector))
+        item = _first_visible(scope.locator(selector))
         if item is not None:
             return item
     return None
 
 
-def _submit_login(page: Any) -> None:
-    buttons = page.get_by_role("button", name=re.compile(r"^로그인$|^log\s*in$", re.IGNORECASE))
+def _find_login_fields(page: Any) -> tuple[Any, Any, Any] | None:
+    """Find a visible username/password pair in one document.
+
+    SNU currently keeps duplicate Korean and English controls in the DOM and has
+    historically embedded authentication documents in a frame. Pairing fields
+    per scope avoids combining a visible username from one variant with a
+    password from another.
+    """
+    scopes = _document_scopes(page)
+    for scope in scopes:
+        _select_id_tab(scope)
+    for scope in scopes:
+        username = _find_username_field(scope)
+        password = _visible_password_field(scope)
+        if username is not None and password is not None:
+            return scope, username, password
+    return None
+
+
+def _submit_login(scope: Any, password: Any) -> None:
+    buttons = scope.get_by_role(
+        "button",
+        name=re.compile(r"^로그\s*인$|^sign\s*in$|^log\s*in$", re.IGNORECASE),
+    )
     button = _first_visible(buttons)
+    if button is None:
+        button = _first_visible(
+            scope.locator(
+                "#loginProcBtn, button[type='submit'], input[type='submit'], "
+                "button[onclick*='login' i]"
+            )
+        )
     if button is not None:
         button.click()
         return
-    password = _visible_password_field(page)
-    if password is None:
-        raise AuthenticationRequired("could not find the SNU login button")
     password.press("Enter")
 
 
-def _find_two_factor_container(page: Any) -> Any | None:
-    dialog = _first_visible(page.get_by_role("dialog"))
-    if dialog is not None:
+def _find_two_factor_container(page: Any) -> tuple[Any, Any] | None:
+    for scope in _document_scopes(page):
+        dialog = _first_visible(scope.get_by_role("dialog"))
+        if dialog is not None:
+            try:
+                if TWO_FACTOR_TEXT.search(dialog.inner_text()):
+                    return scope, dialog
+            except Exception:
+                pass
+        matches = scope.locator("div").filter(has_text=TWO_FACTOR_TEXT)
+        visible: list[Any] = []
         try:
-            if TWO_FACTOR_TEXT.search(dialog.inner_text()):
-                return dialog
-        except Exception:
-            pass
-    matches = page.locator("div").filter(has_text=TWO_FACTOR_TEXT)
-    visible: list[Any] = []
-    try:
-        for index in range(min(matches.count(), 30)):
-            item = matches.nth(index)
-            if item.is_visible():
-                visible.append(item)
-    except Exception:
-        return None
-    # Choose the smallest matching container that still owns the modal's
-    # checkbox. A plain text node containing "추가 인증" is too narrow.
-    for item in reversed(visible):
-        try:
-            checkboxes = item.locator("input[type='checkbox']")
-            if any(checkboxes.nth(i).is_visible() for i in range(checkboxes.count())):
-                return item
+            for index in range(min(matches.count(), 30)):
+                item = matches.nth(index)
+                if item.is_visible():
+                    visible.append(item)
         except Exception:
             continue
-    return visible[0] if visible else None
+        # Choose the smallest matching container that still owns the modal's
+        # checkbox. A plain text node containing "추가 인증" is too narrow.
+        for item in reversed(visible):
+            try:
+                checkboxes = item.locator("input[type='checkbox']")
+                if any(checkboxes.nth(i).is_visible() for i in range(checkboxes.count())):
+                    return scope, item
+            except Exception:
+                continue
+        if visible:
+            return scope, visible[0]
+    return None
 
 
 def _set_trusted_browser(page: Any, container: Any, enabled: bool) -> bool:
@@ -352,7 +428,10 @@ def _submit_two_factor_code(
     _click_named(
         page,
         container,
-        re.compile(r"인증\s*확인|confirm\s+(verification|authentication)", re.IGNORECASE),
+        re.compile(
+            r"인증\s*확인|confirm\s+(verification|authentication)|^verify$",
+            re.IGNORECASE,
+        ),
     )
 
 
@@ -396,7 +475,9 @@ def canvas_profile_is_authenticated(context: Any, origin: str) -> bool:
 
 
 def browser_looks_authenticated(context: Any, page: Any) -> bool:
-    if _on_sso(page) or _visible_password_field(page) is not None:
+    if _on_sso(page) or any(
+        _visible_password_field(scope) is not None for scope in _document_scopes(page)
+    ):
         return False
     parts = urlsplit(page.url)
     if parts.scheme in {"http", "https"} and parts.netloc:
@@ -437,27 +518,34 @@ def _login_page(
     if entry_url != config.base_url:
         page.goto(config.base_url, wait_until="domcontentloaded")
     form_deadline = time.monotonic() + min(config.login_timeout_seconds, 45)
-    username_field = None
-    password_field = None
+    login_fields = None
     while time.monotonic() < form_deadline:
         if browser_looks_authenticated(context, page):
             persist_auth_state(context, config, page.url)
             LOGGER.info("browser profile is already authenticated")
             return page.url
-        _select_id_tab(page)
-        username_field = _find_username_field(page)
-        password_field = _visible_password_field(page)
-        if username_field is not None and password_field is not None:
+        login_fields = _find_login_fields(page)
+        if login_fields is not None:
             break
         time.sleep(0.25)
-    if username_field is None or password_field is None:
-        host = urlsplit(page.url).hostname or "unknown host"
+    if login_fields is None:
+        hosts = []
+        for scope in _document_scopes(page):
+            try:
+                host = urlsplit(scope.url).hostname or "unknown host"
+            except Exception:
+                continue
+            if host not in hosts:
+                hosts.append(host)
         raise AuthenticationRequired(
-            f"could not find visible SNU ID/password fields after redirect ({host})"
+            "could not find a visible SNU ID/password form after redirect "
+            f"({', '.join(hosts) or 'unknown host'}). The page may be an SNU notice or "
+            "unsupported login challenge; retry with 'snuetl login --headed' to inspect it."
         )
+    login_scope, username_field, password_field = login_fields
     username_field.fill(username)
     password_field.fill(password)
-    _submit_login(page)
+    _submit_login(login_scope, password_field)
 
     deadline = time.monotonic() + config.login_timeout_seconds
     announced = False
@@ -470,14 +558,15 @@ def _login_page(
             persist_auth_state(context, config, page.url)
             LOGGER.info("SNU eTL authentication completed")
             return page.url
-        if _handle_password_change_prompt(page):
+        if any(_handle_password_change_prompt(scope) for scope in _document_scopes(page)):
             time.sleep(0.5)
             continue
 
-        container = _find_two_factor_container(page)
-        if container is not None:
+        two_factor = _find_two_factor_container(page)
+        if two_factor is not None:
+            auth_scope, container = two_factor
             if not trust_configured:
-                if not _set_trusted_browser(page, container, trust_browser):
+                if not _set_trusted_browser(auth_scope, container, trust_browser):
                     action = "enable" if trust_browser else "disable"
                     raise AuthenticationRequired(
                         f"could not {action} trusted-browser authentication"
@@ -496,7 +585,7 @@ def _login_page(
                 method = two_factor_method_provider().strip().casefold()
                 if method not in {"email", "phone"}:
                     raise AuthenticationRequired("2FA method must be 'email' or 'phone'")
-                _send_two_factor_code(page, container, method)
+                _send_two_factor_code(auth_scope, container, method)
                 delivery_sent = True
                 LOGGER.info("SNU verification code requested by %s", method)
             now = time.monotonic()
@@ -505,7 +594,7 @@ def _login_page(
                     raise AuthenticationRequired(
                         "SNU did not accept the verification code after three attempts"
                     )
-                _submit_two_factor_code(page, container, verification_code_provider)
+                _submit_two_factor_code(auth_scope, container, verification_code_provider)
                 verification_attempts += 1
                 last_verification_attempt = time.monotonic()
                 LOGGER.info("submitted verification code; waiting for SNU")

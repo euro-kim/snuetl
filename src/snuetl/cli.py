@@ -72,7 +72,7 @@ from .ui import (
     print_schema,
 )
 from .uninstaller import build_inventory, execute_uninstall, inventory_data
-from .versioning import get_version_info, update_self
+from .versioning import UpdateError, get_version_info, update_self
 
 LOGGER = logging.getLogger(__name__)
 
@@ -890,6 +890,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             return _version(args.check)
         if args.command == "update":
+            if is_container_runtime():
+                raise UpdateError(
+                    "a running container cannot replace its read-only image. On the Docker host, "
+                    "run './docker-update.sh'; it rebuilds and recreates the container while "
+                    "preserving configuration, browser state, and downloads."
+                )
             if args.no_input:
                 # pipx is non-interactive, but make the intention explicit for agents.
                 pass
