@@ -20,6 +20,7 @@ from .runtime import (
     container_status_path,
     container_supervisor_is_active,
 )
+from .telegram_api import load_telegram_token
 
 LOGGER = logging.getLogger("snuetl.container")
 _DOWNLOAD_DIR = Path("/data/downloads")
@@ -65,7 +66,13 @@ def _runtime_signature(config_path: Path, token_path: Path | None) -> tuple[int 
     )
 
 
-def _write_status(*, discord_active: bool, discord_pid: int | None) -> None:
+def _write_status(
+    *,
+    discord_active: bool,
+    discord_pid: int | None,
+    telegram_active: bool = False,
+    telegram_pid: int | None = None,
+) -> None:
     directory = container_runtime_dir()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload = {
@@ -74,20 +81,24 @@ def _write_status(*, discord_active: bool, discord_pid: int | None) -> None:
         "supervisor_pid": os.getpid(),
         "discord_active": discord_active,
         "discord_pid": discord_pid,
+        "telegram_active": telegram_active,
+        "telegram_pid": telegram_pid,
     }
     temporary = container_status_path().with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     os.replace(temporary, container_status_path())
 
 
-def _stop_process(process: subprocess.Popen[bytes], *, timeout_seconds: float = 10.0) -> None:
+def _stop_process(
+    process: subprocess.Popen[bytes], *, timeout_seconds: float = 10.0, name: str = "Discord"
+) -> None:
     if process.poll() is not None:
         return
     process.terminate()
     try:
         process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        LOGGER.warning("Discord did not stop within %.0f seconds; killing it", timeout_seconds)
+        LOGGER.warning("%s did not stop within %.0f seconds; killing it", name, timeout_seconds)
         process.kill()
         process.wait()
 
@@ -105,6 +116,19 @@ def _discord_command(config_path: Path) -> list[str]:
     ]
 
 
+def _telegram_command(config_path: Path) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "snuetl",
+        "--config",
+        str(config_path),
+        "telegram",
+        "run",
+        "--no-input",
+    ]
+
+
 def run_supervisor() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config_path = bootstrap_container_config()
@@ -117,75 +141,120 @@ def run_supervisor() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
-    process: subprocess.Popen[bytes] | None = None
-    signature: tuple[int | None, ...] | None = None
-    next_start = 0.0
-    backoff = _INITIAL_BACKOFF_SECONDS
-    started_at: float | None = None
+    processes: dict[str, subprocess.Popen[bytes] | None] = {"discord": None, "telegram": None}
+    signatures: dict[str, object] = {"discord": None, "telegram": None}
+    next_start = {"discord": 0.0, "telegram": 0.0}
+    backoff = {"discord": _INITIAL_BACKOFF_SECONDS, "telegram": _INITIAL_BACKOFF_SECONDS}
+    started_at: dict[str, float | None] = {"discord": None, "telegram": None}
     waiting_message_printed = False
     LOGGER.info("snuetl container supervisor is ready")
 
     try:
         while not stopping:
+            current_signatures: dict[str, object]
             try:
                 config = load_config(config_path)
-                token_path = config.discord_token_path
-                desired = bool(
-                    config.setup_complete
-                    and config.discord.enabled
-                    and config.discord.configured
-                    and load_discord_token(config)
+                desired = {
+                    "discord": bool(
+                        config.setup_complete
+                        and config.discord.enabled
+                        and config.discord.configured
+                        and load_discord_token(config)
+                    ),
+                    "telegram": bool(
+                        config.setup_complete
+                        and config.telegram.enabled
+                        and config.telegram.configured
+                        and load_telegram_token(config)
+                    ),
+                }
+                common = (
+                    config.base_url,
+                    config.download_dir,
+                    config.state_dir,
+                    config.browser_channel,
+                    config.browser_executable_path,
+                    config.timeout_seconds,
+                    config.retry_count,
+                    config.directory_routes,
+                    config.canvas_api_enabled,
+                    config.setup_complete,
                 )
-                current_signature = _runtime_signature(config_path, token_path)
+                current_signatures = {
+                    "discord": (common, config.discord, _mtime(config.discord_token_path)),
+                    "telegram": (common, config.telegram, _mtime(config.telegram_token_path)),
+                }
             except Exception as exc:
                 LOGGER.warning("Cannot load container configuration: %s", exc)
-                desired = False
-                current_signature = _runtime_signature(config_path, None)
+                desired = {"discord": False, "telegram": False}
+                current_signatures = {
+                    "discord": _runtime_signature(config_path, None),
+                    "telegram": _runtime_signature(config_path, None),
+                }
 
-            if signature is not None and current_signature != signature and process is not None:
-                LOGGER.info("Configuration changed; restarting the Discord daemon")
-                _stop_process(process)
-                process = None
-                next_start = 0.0
-            signature = current_signature
-
-            if process is not None:
-                return_code = process.poll()
-                if return_code is not None:
-                    runtime = time.monotonic() - (started_at or time.monotonic())
-                    LOGGER.warning("Discord daemon exited with code %d", return_code)
+            for gateway in ("discord", "telegram"):
+                process = processes[gateway]
+                if (
+                    signatures[gateway] is not None
+                    and current_signatures[gateway] != signatures[gateway]
+                    and process is not None
+                ):
+                    LOGGER.info("Configuration changed; restarting the %s daemon", gateway)
+                    _stop_process(process, name=gateway.capitalize())
                     process = None
-                    if runtime >= _STABLE_PROCESS_SECONDS:
-                        backoff = _INITIAL_BACKOFF_SECONDS
-                    next_start = time.monotonic() + backoff
-                    backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
-                elif not desired:
-                    LOGGER.info("Discord is disabled or incomplete; stopping the daemon")
-                    _stop_process(process)
-                    process = None
-                    next_start = 0.0
+                    next_start[gateway] = 0.0
+                signatures[gateway] = current_signatures[gateway]
+                if process is not None:
+                    return_code = process.poll()
+                    if return_code is not None:
+                        runtime = time.monotonic() - (started_at[gateway] or time.monotonic())
+                        LOGGER.warning("%s daemon exited with code %d", gateway, return_code)
+                        process = None
+                        if runtime >= _STABLE_PROCESS_SECONDS:
+                            backoff[gateway] = _INITIAL_BACKOFF_SECONDS
+                        next_start[gateway] = time.monotonic() + backoff[gateway]
+                        backoff[gateway] = min(backoff[gateway] * 2, _MAX_BACKOFF_SECONDS)
+                    elif not desired[gateway]:
+                        LOGGER.info("%s is disabled or incomplete; stopping the daemon", gateway)
+                        _stop_process(process, name=gateway.capitalize())
+                        process = None
+                        next_start[gateway] = 0.0
+                if desired[gateway] and process is None and time.monotonic() >= next_start[gateway]:
+                    LOGGER.info("Starting the %s daemon", gateway)
+                    command = (
+                        _discord_command(config_path)
+                        if gateway == "discord"
+                        else _telegram_command(config_path)
+                    )
+                    process = subprocess.Popen(command)
+                    started_at[gateway] = time.monotonic()
+                    waiting_message_printed = False
+                processes[gateway] = process
 
-            if desired and process is None and time.monotonic() >= next_start:
-                LOGGER.info("Starting the Discord daemon")
-                process = subprocess.Popen(_discord_command(config_path))
-                started_at = time.monotonic()
-                waiting_message_printed = False
-            elif not desired and not waiting_message_printed:
+            if not any(desired.values()) and not waiting_message_printed:
                 LOGGER.info(
                     "Waiting for setup; run: docker compose exec snuetl snuetl setup --headless"
                 )
                 LOGGER.info(
-                    "Then configure Discord with: docker compose exec snuetl snuetl discord"
+                    "Then configure a gateway with: docker compose exec snuetl snuetl discord; or docker compose exec snuetl snuetl telegram"
                 )
                 waiting_message_printed = True
 
-            active = process is not None and process.poll() is None
-            discord_pid = process.pid if process is not None and active else None
-            _write_status(discord_active=active, discord_pid=discord_pid)
+            discord_process = processes["discord"]
+            telegram_process = processes["telegram"]
+            discord_active = discord_process is not None and discord_process.poll() is None
+            telegram_active = telegram_process is not None and telegram_process.poll() is None
+            _write_status(
+                discord_active=discord_active,
+                discord_pid=discord_process.pid if discord_active and discord_process else None,
+                telegram_active=telegram_active,
+                telegram_pid=telegram_process.pid if telegram_active and telegram_process else None,
+            )
             time.sleep(_POLL_SECONDS)
     finally:
-        if process is not None:
-            _stop_process(process)
+        for gateway, process in processes.items():
+            if process is not None:
+                _stop_process(process, name=gateway.capitalize())
         container_status_path().unlink(missing_ok=True)
     return 0
 

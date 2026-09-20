@@ -17,12 +17,17 @@ def handle_cli_exception(args: argparse.Namespace, exc: BaseException) -> int:
     json_output = bool(getattr(args, "json", False))
 
     if isinstance(exc, AuthenticationRequired):
+        remediation = (
+            "Run snuetl api setup."
+            if "snuetl api setup" in str(exc)
+            else "Run snuetl login interactively."
+        )
         if json_output:
             emit_error(
                 command,
                 "AUTHENTICATION_REQUIRED",
                 str(redact(exc)),
-                "Run snuetl login interactively.",
+                remediation,
             )
         else:
             LOGGER.error("authentication required: %s", exc)

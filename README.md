@@ -6,7 +6,7 @@
 **snuetl** is a self-hosted Linux command-line application for synchronizing authorized
 course content from Seoul National University's eTL platform. It downloads course files,
 articles, syllabi, and videos; maintains a queryable local catalog; and can be operated
-interactively, by systemd, or through a private Discord bot.
+interactively, by systemd, or through a private Discord or Telegram bot.
 
 Authentication runs in a dedicated Chromium profile so the trusted-browser session can
 survive between runs. Saved passwords are optional, one-time verification codes are never
@@ -27,12 +27,14 @@ stored, and unattended commands fail closed when renewed verification is require
 - Optional hardened systemd user timer for unattended synchronization.
 - Docker Compose deployment with persistent storage and an always-accessible shell.
 - Optional private Discord control with owner, server, and channel allowlists.
+- Optional private Telegram control with a 09:00 Korea-time deadline digest.
 - Stable `--json --no-input` contract and documented exit codes for automation.
 
 ## Contents
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Codex desktop skill for macOS and Windows](#codex-desktop-skill-for-macos-and-windows)
 - [Docker Compose deployment](#docker-compose-deployment)
 - [Raspberry Pi and Linux ARM64](#raspberry-pi-and-linux-arm64)
 - [Authentication and secrets](#authentication-and-secrets)
@@ -40,6 +42,7 @@ stored, and unattended commands fail closed when renewed verification is require
 - [Multiple users on one Linux server](#multiple-users-on-one-linux-server)
 - [Command reference](#command-reference)
 - [Discord remote control](#discord-remote-control)
+- [Telegram remote control](#telegram-remote-control)
 - [SQL catalog](#sql-catalog)
 - [Pull course content](#pull-course-content)
 - [Agent and script interface](#agent-and-script-interface)
@@ -108,6 +111,49 @@ python -m pip install -e '.[test]'
 snuetl
 ```
 
+## Codex desktop skill for macOS and Windows
+
+The Codex skill is a separate, read-only Canvas API client. It does not install the Linux
+synchronizer, run a daemon, or require WSL, Docker, Python, or a server on the user's
+machine. The pilot supports macOS 14+ on Apple Silicon and Intel and native Windows x64.
+The skill files live at `~/.agents/skills/snuetl` (on Windows,
+`%USERPROFILE%\.agents\skills\snuetl`).
+
+For a native installation, download the matching `snuetl-codex-macos-arm64.dmg`,
+`snuetl-codex-macos-x86_64.dmg`, or `snuetl-codex-windows-x64.msi` from a versioned
+release. On Mac, open the DMG and double-click **Install SNUETL Codex**. On Windows,
+open the MSI, then use Codex desktop with its **Windows native** agent.
+The personal pilot artifacts are unsigned, so the operating system may ask you to
+confirm that you trust the downloaded installer.
+
+Codex can also install the same native package for you. In a local Codex desktop chat,
+ask: “Check out `euro-kim/snuetl` at release tag `vX.Y.Z`, inspect its matching
+`packaging/macos/install-release.sh` or `packaging/windows/install-release.ps1`, and run
+that script with `vX.Y.Z` to install the SNUETL Codex desktop skill on this computer.”
+The scripts download the versioned installer, verify its SHA-256 checksum, and open it.
+Replace `vX.Y.Z` with a published release tag. Start a new Codex chat if the new skill
+does not appear immediately.
+
+Then say **`$snuetl connect`**. A separate visible browser opens; complete SNU login and
+MFA there. The helper creates a Canvas token through Account Settings, validates it,
+and saves the secret in macOS Keychain or Windows Credential Manager. The login browser
+closes without saving passwords or cookies. The token is never printed into Codex.
+Each computer connects independently.
+
+Ask questions such as “What is due this week?”, “Show missing assignments”, or “Show
+my grades for Biology.” The helper retrieves live Canvas data on demand and returns
+JSON for Codex to summarize. `$snuetl rotate` replaces the token; `$snuetl disconnect`
+revokes it through Canvas and removes it locally. The desktop helper supports active
+courses, upcoming work, missing submissions, submission states, grades, calendar
+events, and discussion topics. Canvas fields that are hidden or unavailable remain
+unknown in the answer.
+
+Build the Mac DMG on the corresponding Mac architecture with
+`bash packaging/macos/build.sh`; build the Windows MSI on native Windows x64 with
+`packaging/windows/build.ps1`. The [desktop build workflow](.github/workflows/codex-desktop.yml)
+builds all three artifacts from native runners. Live SNU login is not exercised in CI;
+perform a supervised connection test on each target OS before distributing a pilot.
+
 ## Docker Compose deployment
 
 Docker Compose packages Python, Chromium, browser libraries, and FFmpeg into one image.
@@ -133,18 +179,16 @@ The script provides the complete host-side deployment workflow:
 - copies `.env.example` to `.env` only when `.env` does not already exist;
 - pauses while you review the container name, timezone, and persistent host paths;
 - corrects `SNUETL_UID` and `SNUETL_GID` to match the invoking login user;
-- safely creates each configured directory and repairs ownership with `sudo` only when
-  access would otherwise fail;
-- keeps configuration and state owner-private at `0700`, while preserving existing usable
-  permissions such as `0755` or `0750` on download and video directories;
+- creates missing bind mount directories at `0700` and checks access to existing ones;
+- leaves ownership and modes of existing mounted directories and their contents unchanged;
 - rebuilds with the latest base image and no stale build cache before stopping the current
   container;
 - replaces a previous Compose attempt without deleting bind-mounted data;
 - recreates the named container in detached mode and waits for a healthy supervisor.
 
 The repository ignores `.env` and the default `docker-data/` tree. Run the script as your
-normal login user, not with `sudo`; it requests elevated access itself if an absolute host
-path or stale root-owned directory needs repair. Existing configuration and downloaded
+normal login user, not with `sudo`; it requests elevated access only to create a missing
+directory beneath a protected parent. Existing configuration and downloaded
 content are preserved. The script intentionally does not run a global Docker cache prune,
 remove named volumes, or delete any configured host directory.
 
@@ -153,19 +197,22 @@ The deployment requires standard rootful Docker on Linux. Rootless Docker and da
 directory is changed. Docker Desktop on macOS and Windows remains unsupported.
 
 After the script reports that the deployment is healthy, complete headless enrollment and
-configure Discord:
+configure either remote gateway:
 
 ```bash
 docker compose exec snuetl snuetl setup --headless
-docker compose exec snuetl snuetl discord
+docker compose exec snuetl snuetl telegram setup
 docker compose exec snuetl snuetl doctor
 ```
+
+For Discord, use `docker compose exec snuetl snuetl discord` instead of the Telegram
+setup command.
 
 The setup wizard already defaults to `/data/downloads` and `/data/videos`; keep those
 container paths even when the matching host paths differ. Credentials and verification
 codes are entered through the attached terminal. No browser window or VNC port is exposed.
-After Discord setup completes, the supervisor notices the saved configuration and starts
-the bot without requiring a container restart.
+After gateway setup completes, the supervisor starts its bot without requiring a
+container restart. Discord and Telegram can run together.
 
 ### Persistent path model
 
@@ -187,19 +234,17 @@ rebuilt or moved without rewriting catalog records.
 The default repository-local paths are convenient for a first run. For a server, replace
 them with absolute host paths before enrollment. The setup script rejects a literal `~`,
 environment-variable expansion, overlapping directories, repository ancestors, and unsafe
-top-level system paths before changing permissions. After changing `.env`, rerun the script;
+top-level system paths before using a mount. After changing `.env`, rerun the script;
 it rebuilds for possible UID/GID changes and recreates the container while preserving data:
 
 ```bash
 ./docker-setup.sh
 ```
 
-Configuration and state contain reusable credentials and therefore require matching
-ownership and mode `0700`. Download and video roots are content storage: existing ownership
-and modes are left unchanged whenever the container UID or GID already has read, write, and
-traverse access. If access is incomplete, the script adds only the missing owner or group
-bits; it changes ownership only when neither the configured UID nor GID can use the path.
-New content directories start at the conservative mode `0700`, which you may broaden later.
+Configuration and state contain reusable credentials, so choose suitable host permissions
+yourself. Docker setup and container startup preserve modes on existing bind mounts. If the
+container UID/GID cannot read, write, and traverse one, setup reports the path and stops.
+New directories start at `0700`.
 
 ### Terminal and operations
 
@@ -221,8 +266,8 @@ docker compose start snuetl
 ```
 
 An `unhealthy` container means the supervisor heartbeat stopped. A healthy container can
-still be waiting for initial setup or Discord pairing; use `snuetl doctor` and
-`snuetl discord status` to inspect application readiness.
+still be waiting for initial setup or gateway pairing; use `snuetl doctor` and
+`snuetl telegram status` or `snuetl discord status` to inspect application readiness.
 
 ### Updating a Docker deployment
 
@@ -235,13 +280,14 @@ the host checkout with the dedicated script:
 ./docker-update.sh
 ```
 
-The updater verifies that the checkout is clean and on `main`, fetches `origin/main`, shows
-the incoming commits, and asks before applying them. It only permits a fast-forward update;
-it never resets local history or overwrites local changes. After updating the checkout it
-delegates path checks, a fresh no-cache image build, detached container recreation, log
-reporting, and health verification to `docker-setup.sh`. The new image is built before the
-current container is stopped, so a build failure leaves the running deployment untouched.
-All four bind-mounted data directories are preserved.
+The updater verifies that the checkout is clean and on `main`, fetches `origin/main`, and
+compares that commit with both the checkout and the running container image's revision
+label and image ID. A current checkout with an old image is rebuilt. It only permits a
+fast-forward source update and never resets local history. The new image is built before
+the current container is replaced. If health verification fails, the updater restores and
+checks the previous image. All four bind-mounted data directories are preserved. Running
+`snuetl update` inside the container cannot persist across recreation because the package
+is installed in the image.
 
 After the replacement is healthy, refresh SNU authentication with the corrected login
 handling if the old container failed on the NSSO redirect:
@@ -258,9 +304,9 @@ already has the current source revision:
 ./docker-update.sh --force-rebuild
 ```
 
-`--yes` skips only the Git-update confirmation. `--force-rebuild` is useful when another
-Compose instance already pulled the shared checkout, or when an image must be recreated
-without a new commit. The normal no-update case exits without an unnecessary image build.
+`--yes` skips the update confirmation. `--force-rebuild` recreates a healthy deployment
+even when its image already contains the fetched commit. Each Compose project uses its own
+image tag so updating one project does not replace another project's image.
 
 For a consistent backup, stop the container and copy the four host directories from
 `.env`, encrypting the config/state backup because it contains reusable credentials,
@@ -361,17 +407,17 @@ the server so SNU trusts that machine's dedicated profile.
 `snuetl` follows the XDG directory convention and does not create `~/.snuetl`:
 
 - `~/.config/snuetl/config.toml` stores normal settings, including the download root,
-  browser mode, directory routes, and Discord server/channel/owner IDs.
+  browser mode, directory routes, and remote gateway binding IDs.
 - `~/.local/state/snuetl/` stores private runtime state: `state.db`, the browser
   profile and auth state, optional `credentials.json`, install provenance, and
-  `discord-token`. Discord jobs are persisted in `state.db`.
+  `discord-token` and `telegram-token`. Remote jobs are persisted in `state.db`.
 - `~/Downloads/snuetl/` is the default pulled-content root; setup or
   `snuetl directory` can change it.
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` relocate the first two roots. The config and
-secret files are owner-only (`0600`) and the state directory is `0700`. The Discord
-token is deliberately separate from TOML so it does not appear beside ordinary
-configuration, but both the token and optional SNU credential file are plaintext secrets
+secret files are owner-only (`0600`) and the state directory is `0700`. Gateway
+tokens are deliberately separate from TOML so they do not appear beside ordinary
+configuration, but each token and the optional SNU credential file are plaintext secrets
 and must be protected accordingly.
 
 ## Multiple users on one Linux server
@@ -426,11 +472,25 @@ Bare `snuetl` displays current local status and the command menu after onboardin
 ```text
 snuetl setup                    guided setup or repair
 snuetl login                    refresh SNU authentication
+snuetl api setup                create Canvas API access through Account Settings
+snuetl api status               check API access without revealing the token
+snuetl api rotate               replace the Canvas token
 snuetl courses                  list active course IDs and names
 snuetl files [COURSE]           list file titles, folders, sizes, and dates
 snuetl articles [COURSE]        list announcement and course-page titles
 snuetl assignments [COURSE]     list assignment titles and due dates
 snuetl quizzes [COURSE]         list quiz titles and due dates
+snuetl upcoming                 list incomplete work due in the next 30 days
+snuetl missing                  list past-due missing submissions
+snuetl submissions [COURSE]     list submission states and available scores
+snuetl grades [COURSE]          show available course grades
+snuetl calendar                 list course events for the next 30 days
+snuetl discussions [COURSE]     list discussion topics
+snuetl activity [COURSE]        list new course activity
+snuetl announcements [COURSE]   list recent announcements with summaries
+snuetl modules [COURSE]         show module items, progress, and locks
+snuetl feedback [COURSE]        show recent grades, comments, and rubrics
+snuetl dashboard [COURSE]       summarize near-term work and course grades
 snuetl refresh                  cache every paginated catalog table
 snuetl sql                      open the interactive read-only SQL shell
 snuetl query                    compatibility alias for the SQL shell
@@ -446,16 +506,39 @@ snuetl status                   show the last sync and tracked counts
 snuetl doctor                   check browser, config, profile, and runtime
 snuetl version [--check]        show the installed and published versions
 snuetl update                   update the pipx installation
-snuetl logout                   remove browser authentication and saved credentials
+snuetl logout                   revoke Canvas token and remove local authentication
 snuetl uninstall                remove the app and optionally its local data
 snuetl discord                  pair Discord and install its user daemon
 snuetl discord guide            show exact Developer Portal setup steps
+snuetl telegram                 pair a private Telegram chat and install its daemon
+snuetl telegram guide           show BotFather setup steps
+snuetl telegram alerts off      pause the daily Telegram digest
 ```
 
 `COURSE` may be an exact course ID or a unique portion of its title. Leave it out to
 show content from every active course. The saved headless preference applies to every
 browser-backed terminal command; add `--headed` or `--headless` for a one-command
 override.
+
+Guided setup offers Canvas API access by default. The token is created through the
+authenticated Account Settings page, expires after one year, and is saved at
+`~/.local/state/snuetl/canvas-token.json` with mode `0600`. If you decline, run
+`snuetl api setup` later. The new personal-data commands fetch live results and do not
+add grades or submissions to the SQLite catalog. Use `--from YYYY-MM-DD` and
+`--to YYYY-MM-DD` with `upcoming`, `calendar`, `activity`, `announcements`, or `dashboard` to change
+the date range. `feedback --since YYYY-MM-DD` selects recently graded submissions.
+Use `--json` for the full structured comments and rubric details. New API views honor
+configured course exclusions. Logout revokes the snuetl token on Canvas before removing
+local login state.
+
+For example:
+
+```bash
+snuetl dashboard --json
+snuetl announcements Biology --from 2026-09-01
+snuetl modules Biology --json
+snuetl feedback Biology --since 2026-09-01 --json
+```
 
 ## Discord remote control
 
@@ -602,6 +685,40 @@ The human-readable tables show semester codes separately (`2026-2`, `SNUON`), us
 canonical course IDs, and keep file names and folders distinct in storage. The table
 view intentionally summarizes timestamps and sizes so it remains usable in narrow
 terminals; SQL, JSON, JSONL, and CSV retain the complete values.
+
+## Telegram remote control
+
+Telegram control is opt-in and bound to one private chat and one Telegram user. Complete
+`snuetl setup` first. Create a dedicated bot with [@BotFather](https://t.me/BotFather)
+using `/newbot`, then run:
+
+```bash
+snuetl telegram setup
+```
+
+Paste the bot token into the hidden terminal prompt. Open the pairing link printed by
+snuetl and press **Start** within ten minutes. The bot accepts commands only from the
+paired user in that private chat; group messages and other users are ignored. The token
+is stored outside the config file in an owner-only `telegram-token` state file.
+The bot uses [Telegram long polling](https://core.telegram.org/bots/api#getupdates), so
+neither native nor Docker deployment needs a public inbound port. Use a bot that has no
+existing webhook or other polling consumer.
+
+Available bot commands are `/status`, `/upcoming`, `/missing`, `/activity`,
+`/announcements`, `/modules`, `/feedback`, `/dashboard`, `/sync`, `/jobs`, and `/cancel JOB_ID`.
+The four new Canvas views accept an optional course name or ID after the command.
+`/sync` queues a file synchronization job and reports its result in the chat. `/jobs`
+shows progress, and `/cancel` requests cancellation. Canvas API access is required for
+the live views and digest; run `snuetl api setup` locally if the token is missing or
+expired. Interactive SNU login remains a local command.
+
+At 09:00 Asia/Seoul, the bot sends a daily digest of incomplete work due in the next
+seven days and missing submissions. It sends a short empty digest when there is no work.
+The last delivered date is saved to avoid duplicate messages after a restart. Manage it
+with `snuetl telegram alerts on` or `snuetl telegram alerts off`. Use
+`snuetl telegram status`, `enable`, or `disable` to manage the daemon. Native Linux uses
+`snuetl-telegram.service`; the Docker supervisor starts it after pairing. In Docker,
+run setup as `docker compose exec snuetl snuetl telegram setup`.
 
 ## SQL catalog
 
@@ -965,8 +1082,8 @@ Live account tests are intentionally not automatic. HTML/JSON fixtures should be
 before committing, and traces must never be recorded on the SNU credential or verification
 screens.
 
-This repository does not ship a hosted GitHub Actions workflow. Run the complete local
-quality gate before opening a change:
+The desktop build workflow covers package creation on native runners. Run the complete
+local quality gate before opening a change:
 
 ```bash
 ruff check .

@@ -8,8 +8,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from snuetl import container_runtime, runtime, scheduler
-from snuetl.config import DiscordSettings, load_config, save_config
+from snuetl.config import DiscordSettings, TelegramSettings, load_config, save_config
 from snuetl.discord_config import save_discord_token
+from snuetl.telegram_api import save_telegram_token
 
 
 def _container_environment(monkeypatch, tmp_path: Path) -> None:
@@ -108,9 +109,7 @@ class _FakeDiscordProcess:
         self.return_code = -9
 
 
-def test_supervisor_remains_healthy_and_idle_before_setup(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_supervisor_remains_healthy_and_idle_before_setup(tmp_path: Path, monkeypatch) -> None:
     _container_environment(monkeypatch, tmp_path)
     config_path = tmp_path / "config.toml"
     save_config(load_config(tmp_path / "missing.toml"), config_path)
@@ -118,7 +117,9 @@ def test_supervisor_remains_healthy_and_idle_before_setup(
 
     handlers = {}
     statuses: list[tuple[bool, int | None]] = []
-    monkeypatch.setattr(signal, "signal", lambda number, handler: handlers.setdefault(number, handler))
+    monkeypatch.setattr(
+        signal, "signal", lambda number, handler: handlers.setdefault(number, handler)
+    )
     monkeypatch.setattr(
         container_runtime.subprocess,
         "Popen",
@@ -127,7 +128,9 @@ def test_supervisor_remains_healthy_and_idle_before_setup(
     monkeypatch.setattr(
         container_runtime,
         "_write_status",
-        lambda *, discord_active, discord_pid: statuses.append((discord_active, discord_pid)),
+        lambda *, discord_active, discord_pid, telegram_active, telegram_pid: statuses.append(
+            (discord_active, discord_pid)
+        ),
     )
     monkeypatch.setattr(
         container_runtime.time,
@@ -156,7 +159,9 @@ def test_supervisor_starts_only_discord_and_stops_it_on_shutdown(
     monkeypatch.setattr(container_runtime, "bootstrap_container_config", lambda: config_path)
 
     handlers = {}
-    monkeypatch.setattr(signal, "signal", lambda number, handler: handlers.setdefault(number, handler))
+    monkeypatch.setattr(
+        signal, "signal", lambda number, handler: handlers.setdefault(number, handler)
+    )
     process = _FakeDiscordProcess()
     commands: list[list[str]] = []
 
@@ -177,6 +182,99 @@ def test_supervisor_starts_only_discord_and_stops_it_on_shutdown(
     assert "sync" not in commands[0]
     assert process.terminated is True
     assert not runtime.container_status_path().exists()
+
+
+def test_supervisor_runs_discord_and_telegram_together(tmp_path: Path, monkeypatch) -> None:
+    _container_environment(monkeypatch, tmp_path)
+    config_path = tmp_path / "config.toml"
+    config = replace(
+        load_config(tmp_path / "missing.toml"),
+        state_dir=tmp_path / "state",
+        download_dir=tmp_path / "downloads",
+        setup_complete=True,
+        discord=DiscordSettings(True, 100, 200, 300, frozenset({400})),
+        telegram=TelegramSettings(True, 500, 500),
+    )
+    save_config(config, config_path)
+    save_discord_token(config, "secret.bot.token")
+    save_telegram_token(config, "123456:secret")
+    monkeypatch.setattr(container_runtime, "bootstrap_container_config", lambda: config_path)
+    handlers = {}
+    monkeypatch.setattr(
+        signal, "signal", lambda number, handler: handlers.setdefault(number, handler)
+    )
+    commands: list[list[str]] = []
+    processes: list[_FakeDiscordProcess] = []
+
+    def start(command: list[str]):
+        commands.append(command)
+        process = _FakeDiscordProcess()
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(container_runtime.subprocess, "Popen", start)
+    monkeypatch.setattr(
+        container_runtime.time,
+        "sleep",
+        lambda _seconds: handlers[signal.SIGTERM](signal.SIGTERM, None),
+    )
+
+    assert container_runtime.run_supervisor() == 0
+    assert {tuple(command[-3:]) for command in commands} == {
+        ("discord", "run", "--no-input"),
+        ("telegram", "run", "--no-input"),
+    }
+    assert len(processes) == 2 and all(process.terminated for process in processes)
+
+
+def test_telegram_config_change_does_not_restart_discord(tmp_path: Path, monkeypatch) -> None:
+    _container_environment(monkeypatch, tmp_path)
+    config_path = tmp_path / "config.toml"
+    config = replace(
+        load_config(tmp_path / "missing.toml"),
+        state_dir=tmp_path / "state",
+        download_dir=tmp_path / "downloads",
+        setup_complete=True,
+        discord=DiscordSettings(True, 100, 200, 300, frozenset({400})),
+        telegram=TelegramSettings(True, 500, 500),
+    )
+    save_config(config, config_path)
+    save_discord_token(config, "secret.bot.token")
+    save_telegram_token(config, "123456:secret")
+    monkeypatch.setattr(container_runtime, "bootstrap_container_config", lambda: config_path)
+    handlers = {}
+    monkeypatch.setattr(
+        signal, "signal", lambda number, handler: handlers.setdefault(number, handler)
+    )
+    commands: list[list[str]] = []
+    processes: list[_FakeDiscordProcess] = []
+
+    def start(command: list[str]):
+        commands.append(command)
+        process = _FakeDiscordProcess()
+        processes.append(process)
+        return process
+
+    ticks = 0
+
+    def advance(_seconds: float):
+        nonlocal ticks
+        ticks += 1
+        if ticks == 1:
+            save_config(
+                replace(config, telegram=replace(config.telegram, alerts_enabled=False)),
+                config_path,
+            )
+        else:
+            assert processes[0].terminated is False
+            assert processes[1].terminated is True
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    monkeypatch.setattr(container_runtime.subprocess, "Popen", start)
+    monkeypatch.setattr(container_runtime.time, "sleep", advance)
+
+    assert container_runtime.run_supervisor() == 0
+    assert [command[-3] for command in commands] == ["discord", "telegram", "telegram"]
 
 
 def test_healthcheck_fails_without_supervisor(tmp_path: Path, monkeypatch) -> None:

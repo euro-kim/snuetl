@@ -1,0 +1,33 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SNUETL Codex" Manufacturer="snuetl contributors"
+           Version="$(var.ProductVersion)" UpgradeCode="8C06D6B4-7CE7-49EB-A4EF-82738C2F87F3"
+           Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer SNUETL Codex version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="APPROOT" Name="SNUETL Codex">
+        <Directory Id="BINDIR" Name="bin" />
+      </Directory>
+    </StandardDirectory>
+    <Directory Id="USERHOME" Name="UserHome">
+      <Directory Id="AGENTSDIR" Name=".agents">
+        <Directory Id="SKILLSDIR" Name="skills">
+          <Directory Id="SKILLDIR" Name="snuetl" />
+        </Directory>
+      </Directory>
+    </Directory>
+    <SetDirectory Id="USERHOME" Value="[%USERPROFILE]" />
+
+    <ComponentGroup Id="HelperFiles">
+      <Files Include="$(var.PayloadDir)\**" Directory="BINDIR" />
+    </ComponentGroup>
+    <Component Id="SkillFile" Directory="SKILLDIR" Guid="CB9B58A0-23D3-47BC-B34F-75C60DC11635">
+      <File Source="$(var.SkillFile)" Name="SKILL.md" KeyPath="yes" />
+    </Component>
+    <Feature Id="Main" Title="SNUETL Codex" Level="1">
+      <ComponentGroupRef Id="HelperFiles" />
+      <ComponentRef Id="SkillFile" />
+    </Feature>
+  </Package>
+</Wix>

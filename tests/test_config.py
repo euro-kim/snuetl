@@ -46,6 +46,15 @@ def test_private_directory_tightens_permissions_only_when_needed(
     assert path.stat().st_mode & 0o777 == 0o700
 
 
+def test_container_preserves_existing_mounted_directory_mode(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "mounted-state"
+    path.mkdir(mode=0o755)
+    path.chmod(0o755)
+    monkeypatch.setenv("SNUETL_RUNTIME", "container")
+    ensure_private_directory(path)
+    assert path.stat().st_mode & 0o777 == 0o755
+
+
 def test_defaults_without_file(tmp_path: Path) -> None:
     config = load_config(tmp_path / "missing.toml")
     assert config.base_url == "https://etl.snu.ac.kr/login"

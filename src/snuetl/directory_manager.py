@@ -156,7 +156,7 @@ def directory_permission_report(path: Path) -> DirectoryPermissionReport:
         remediation.append(
             f"Choose a directory you own or run: sudo chown {current_uid}:{os.getegid()} -- {quoted}"
         )
-    if owned and mode & 0o700 != 0o700:
+    if owned and mode & 0o700 != 0o700 and not (readable and writable and searchable):
         usable_mode = mode | 0o700
         issues.append(f"the owner lacks read, write, or search permission (mode {mode:04o})")
         remediation.append(f"Restore owner access with: chmod {usable_mode:04o} -- {quoted}")
@@ -190,6 +190,13 @@ def secure_managed_directory(path: Path) -> DirectoryPermissionReport:
     before = directory_permission_report(root)
     if before.exists and not before.is_directory:
         raise PermissionError(f"managed path is not a directory: {root}")
+    if before.exists and os.environ.get("SNUETL_RUNTIME") == "container":
+        if not (before.readable and before.writable and before.searchable):
+            raise PermissionError(
+                f"mounted directory is not usable by the container user: {root}. "
+                + "; ".join(before.issues)
+            )
+        return before
     if before.exists and not before.safe and not before.owned_by_current_user:
         remediation = before.remediation[0] if before.remediation else "Choose a directory you own."
         raise PermissionError(
@@ -212,8 +219,7 @@ def secure_managed_directory(path: Path) -> DirectoryPermissionReport:
     if not after.safe:
         guidance = " ".join(after.remediation) or "Choose a usable directory."
         raise PermissionError(
-            f"managed directory is still unusable for {root}: "
-            f"{'; '.join(after.issues)}. {guidance}"
+            f"managed directory is still unusable for {root}: {'; '.join(after.issues)}. {guidance}"
         )
     return replace(
         after,

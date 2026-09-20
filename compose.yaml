@@ -1,12 +1,14 @@
 services:
   snuetl:
     container_name: ${SNUETL_CONTAINER_NAME:-snuetl}
-    image: snuetl:local
+    image: ${SNUETL_IMAGE:-snuetl:local}
     build:
       context: .
       args:
         SNUETL_UID: ${SNUETL_UID:-1000}
         SNUETL_GID: ${SNUETL_GID:-1000}
+        SNUETL_SOURCE_REVISION: ${SNUETL_SOURCE_REVISION:-unknown}
+        SNUETL_PACKAGE_VERSION: ${SNUETL_PACKAGE_VERSION:-unknown}
     init: true
     restart: unless-stopped
     stdin_open: true

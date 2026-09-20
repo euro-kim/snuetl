@@ -5,6 +5,7 @@ import logging
 import uuid
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
+from contextlib import suppress
 from typing import Any
 
 from .config import Config
@@ -33,31 +34,33 @@ class DiscordJobQueue:
         on_progress: ProgressCallback,
         on_finished: FinishedCallback,
         login_callbacks: LoginCallbackFactory | None = None,
+        gateway: str = "discord",
     ) -> None:
         self.config = config
         self.on_progress = on_progress
         self.on_finished = on_finished
         self.login_callbacks = login_callbacks
+        self.gateway = gateway
         self._wake = asyncio.Event()
         self._stopping = False
         self._worker: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         with StateStore(self.config.database_path) as store:
-            store.interrupt_discord_jobs()
+            store.interrupt_remote_jobs(self.gateway)
         self._worker = asyncio.create_task(self._run(), name="snuetl-discord-jobs")
 
     async def stop(self) -> None:
         self._stopping = True
         with StateStore(self.config.database_path) as store:
-            for job in store.list_discord_jobs(limit=20):
+            for job in store.list_remote_jobs(self.gateway, limit=20):
                 if job.status == "running":
-                    store.request_discord_job_cancel(job.job_id)
+                    store.request_remote_job_cancel(job.job_id, self.gateway)
         self._wake.set()
         if self._worker is not None:
             await self._worker
         with StateStore(self.config.database_path) as store:
-            store.interrupt_discord_jobs()
+            store.interrupt_remote_jobs(self.gateway)
 
     def enqueue(
         self,
@@ -65,17 +68,24 @@ class DiscordJobQueue:
         arguments: dict[str, object],
         requester_id: int,
         channel_id: int,
+        *,
+        job_id: str | None = None,
     ) -> DiscordJob:
         with StateStore(self.config.database_path) as store:
-            job = store.create_discord_job(
-                uuid.uuid4().hex[:12], command, arguments, requester_id, channel_id=channel_id
+            job = store.create_remote_job(
+                self.gateway,
+                job_id or uuid.uuid4().hex[:12],
+                command,
+                arguments,
+                requester_id,
+                channel_id=channel_id,
             )
         self._wake.set()
         return job
 
     def cancel(self, job_id: str) -> bool:
         with StateStore(self.config.database_path) as store:
-            changed = store.request_discord_job_cancel(job_id)
+            changed = store.request_remote_job_cancel(job_id, self.gateway)
             job = store.get_discord_job(job_id)
         if changed and job is not None and job.status == "cancelled":
             asyncio.create_task(self.on_finished(job, None))
@@ -85,10 +95,11 @@ class DiscordJobQueue:
     async def _run(self) -> None:
         while not self._stopping:
             with StateStore(self.config.database_path) as store:
-                job = store.next_discord_job()
+                job = store.next_remote_job(self.gateway)
             if job is None:
                 self._wake.clear()
-                await self._wake.wait()
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), timeout=2.0)
                 continue
             result: dict[str, object] | None = None
             loop = asyncio.get_running_loop()
@@ -107,7 +118,9 @@ class DiscordJobQueue:
                 def report_publish_error(completed: Future[None]) -> None:
                     error = completed.exception()
                     if error is not None:
-                        LOGGER.error("Could not publish Discord job progress: %s", redact(error))
+                        LOGGER.error(
+                            "Could not publish %s job progress: %s", self.gateway, redact(error)
+                        )
 
                 future.add_done_callback(report_publish_error)
 
@@ -131,7 +144,8 @@ class DiscordJobQueue:
             except Exception as exc:
                 message = str(redact(exc)) or type(exc).__name__
                 LOGGER.error(
-                    "Discord job failed job=%s command=%s error=%s: %s",
+                    "%s job failed job=%s command=%s error=%s: %s",
+                    self.gateway,
                     job.job_id,
                     job.command,
                     type(exc).__name__,
@@ -146,4 +160,7 @@ class DiscordJobQueue:
             try:
                 await self.on_finished(finished, result)
             except Exception as exc:
-                LOGGER.error("Could not publish Discord job result: %s", redact(exc))
+                LOGGER.error("Could not publish %s job result: %s", self.gateway, redact(exc))
+
+
+RemoteJobQueue = DiscordJobQueue

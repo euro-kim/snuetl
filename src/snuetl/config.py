@@ -32,6 +32,18 @@ class DiscordSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class TelegramSettings:
+    enabled: bool = False
+    owner_id: int | None = None
+    chat_id: int | None = None
+    alerts_enabled: bool = True
+
+    @property
+    def configured(self) -> bool:
+        return self.owner_id is not None and self.chat_id is not None
+
+
+@dataclass(frozen=True, slots=True)
 class DirectoryRoute:
     route_id: str
     destination: Path
@@ -56,6 +68,8 @@ class Config:
     setup_complete: bool
     discord: DiscordSettings = field(default_factory=DiscordSettings)
     directory_routes: tuple[DirectoryRoute, ...] = ()
+    canvas_api_enabled: bool | None = None
+    telegram: TelegramSettings = field(default_factory=TelegramSettings)
 
     @property
     def profile_dir(self) -> Path:
@@ -88,6 +102,14 @@ class Config:
     @property
     def discord_token_path(self) -> Path:
         return self.state_dir / "discord-token"
+
+    @property
+    def telegram_token_path(self) -> Path:
+        return self.state_dir / "telegram-token"
+
+    @property
+    def canvas_token_path(self) -> Path:
+        return self.state_dir / "canvas-token.json"
 
 
 def default_config_path() -> Path:
@@ -137,6 +159,7 @@ def load_config(path: Path | None = None) -> Config:
     browser = _get_table(data, "browser")
     sync = _get_table(data, "sync")
     discord = _get_table(data, "discord")
+    telegram = _get_table(data, "telegram")
     directory = _get_table(data, "directory")
 
     base_url = str(general.get("base_url", "https://etl.snu.ac.kr/login")).rstrip("/")
@@ -179,6 +202,9 @@ def load_config(path: Path | None = None) -> Config:
     setup_value = general.get("setup_complete", False)
     if not isinstance(setup_value, bool):
         raise ConfigError("general.setup_complete must be true or false")
+    api_value = general.get("canvas_api_enabled")
+    if api_value is not None and not isinstance(api_value, bool):
+        raise ConfigError("general.canvas_api_enabled must be true or false")
 
     discord_enabled = discord.get("enabled", False)
     if not isinstance(discord_enabled, bool):
@@ -212,6 +238,25 @@ def load_config(path: Path | None = None) -> Config:
         if owner_id <= 0:
             raise ConfigError("discord.owner_ids must contain positive IDs")
         owner_ids.add(owner_id)
+
+    telegram_enabled = telegram.get("enabled", False)
+    telegram_alerts = telegram.get("alerts_enabled", True)
+    if not isinstance(telegram_enabled, bool) or not isinstance(telegram_alerts, bool):
+        raise ConfigError("telegram enabled and alerts_enabled must be true or false")
+
+    def telegram_id(name: str) -> int | None:
+        value = telegram.get(name)
+        if value in (None, ""):
+            return None
+        if isinstance(value, bool):
+            raise ConfigError(f"telegram.{name} must be a positive ID")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"telegram.{name} must be a positive ID") from exc
+        if parsed <= 0:
+            raise ConfigError(f"telegram.{name} must be a positive ID")
+        return parsed
 
     route_values = directory.get("routes", [])
     if not isinstance(route_values, list):
@@ -264,12 +309,19 @@ def load_config(path: Path | None = None) -> Config:
         retry_count=retries,
         excluded_course_ids=frozenset(str(item) for item in excluded),
         setup_complete=setup_value,
+        canvas_api_enabled=api_value,
         discord=DiscordSettings(
             enabled=discord_enabled,
             application_id=optional_snowflake("application_id"),
             guild_id=optional_snowflake("guild_id"),
             channel_id=optional_snowflake("channel_id"),
             owner_ids=frozenset(owner_ids),
+        ),
+        telegram=TelegramSettings(
+            enabled=telegram_enabled,
+            owner_id=telegram_id("owner_id"),
+            chat_id=telegram_id("chat_id"),
+            alerts_enabled=telegram_alerts,
         ),
         directory_routes=tuple(routes),
     )
@@ -297,12 +349,18 @@ def save_config(config: Config, path: Path | None = None) -> Path:
             f"kind = {quoted(route.kind or '')}\n"
             f"remote_folder = [{remote_folder}]\n"
         )
+    api_setting = (
+        f"canvas_api_enabled = {'true' if config.canvas_api_enabled else 'false'}\n"
+        if config.canvas_api_enabled is not None
+        else ""
+    )
     body = (
         "[general]\n"
         f"base_url = {quoted(config.base_url)}\n"
         f"download_dir = {quoted(config.download_dir)}\n"
         f"state_dir = {quoted(config.state_dir)}\n"
-        f"setup_complete = {'true' if config.setup_complete else 'false'}\n\n"
+        f"setup_complete = {'true' if config.setup_complete else 'false'}\n"
+        f"{api_setting}\n"
         "[browser]\n"
         f"channel = {quoted(channel)}\n"
         f"executable_path = {quoted(executable_path)}\n"
@@ -320,6 +378,11 @@ def save_config(config: Config, path: Path | None = None) -> Path:
         "owner_ids = ["
         + ", ".join(quoted(value) for value in sorted(config.discord.owner_ids))
         + "]\n"
+        + "\n[telegram]\n"
+        + f"enabled = {'true' if config.telegram.enabled else 'false'}\n"
+        + f"owner_id = {quoted(config.telegram.owner_id or '')}\n"
+        + f"chat_id = {quoted(config.telegram.chat_id or '')}\n"
+        + f"alerts_enabled = {'true' if config.telegram.alerts_enabled else 'false'}\n"
         + route_tables
     )
     temporary = config_path.with_name(f".{config_path.name}.tmp")
@@ -349,6 +412,13 @@ def migrate_legacy_layout() -> bool:
 
 
 def ensure_private_directory(path: Path) -> None:
+    existed = path.is_dir()
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.environ.get("SNUETL_RUNTIME") == "container" and existed:
+        if not os.access(path, os.R_OK | os.W_OK | os.X_OK):
+            raise PermissionError(
+                f"mounted directory is not accessible by the container user: {path}"
+            )
+        return
     if stat.S_IMODE(path.stat().st_mode) != 0o700:
         path.chmod(0o700)

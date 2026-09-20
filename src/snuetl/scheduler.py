@@ -10,6 +10,7 @@ from pathlib import Path
 from .runtime import (
     container_discord_is_active,
     container_supervisor_is_active,
+    container_telegram_is_active,
     is_container_runtime,
     request_container_reload,
 )
@@ -92,6 +93,7 @@ def timer_is_enabled() -> bool:
 
 
 DISCORD_SERVICE_NAME = "snuetl-discord.service"
+TELEGRAM_SERVICE_NAME = "snuetl-telegram.service"
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +236,141 @@ def remove_discord_service() -> bool:
     if systemctl:
         subprocess.run([systemctl, "--user", "daemon-reload"], check=False)
         subprocess.run([systemctl, "--user", "reset-failed"], check=False)
+    return existed
+
+
+def telegram_service_path() -> Path:
+    return Path.home() / ".config" / "systemd" / "user" / TELEGRAM_SERVICE_NAME
+
+
+def install_telegram_service(
+    config_path: Path,
+    *,
+    state_dir: Path,
+    download_dir: Path,
+    write_dirs: tuple[Path, ...] = (),
+) -> Path | None:
+    if is_container_runtime():
+        request_container_reload()
+        return None
+    if shutil.which("systemctl") is None:
+        raise RuntimeError("systemctl is not available on this machine")
+    path = telegram_service_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    executable = Path(sys.executable).absolute()
+    command = " ".join(
+        (
+            _systemd_quote(str(executable)),
+            "-m snuetl",
+            "--config",
+            _systemd_quote(str(config_path.resolve())),
+            "telegram run",
+        )
+    )
+    writable = [config_path.resolve().parent, state_dir.resolve(), download_dir.resolve()]
+    writable.extend(item.resolve() for item in write_dirs)
+    write_paths = " ".join(_systemd_quote(str(item)) for item in dict.fromkeys(writable))
+    body = f"""[Unit]
+Description=snuetl Telegram remote-control bot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart={command}
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={write_paths}
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target
+"""
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(body, encoding="utf-8")
+    os.replace(temporary, path)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", TELEGRAM_SERVICE_NAME], check=True)
+    return path
+
+
+def telegram_service_is_enabled() -> bool:
+    if is_container_runtime():
+        return container_supervisor_is_active()
+    if shutil.which("systemctl") is None:
+        return False
+    return (
+        subprocess.run(
+            ["systemctl", "--user", "is-enabled", TELEGRAM_SERVICE_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def telegram_service_is_active() -> bool:
+    if is_container_runtime():
+        return container_telegram_is_active()
+    if shutil.which("systemctl") is None:
+        return False
+    return (
+        subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", TELEGRAM_SERVICE_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def set_telegram_service_enabled(enabled: bool) -> None:
+    if is_container_runtime():
+        request_container_reload()
+        return
+    if shutil.which("systemctl") is None:
+        raise RuntimeError("systemctl is not available on this machine")
+    action = "enable" if enabled else "disable"
+    subprocess.run(["systemctl", "--user", action, "--now", TELEGRAM_SERVICE_NAME], check=True)
+
+
+def restart_telegram_service() -> None:
+    if is_container_runtime():
+        request_container_reload()
+        return
+    if shutil.which("systemctl") is None:
+        raise RuntimeError("systemctl is not available on this machine")
+    subprocess.run(["systemctl", "--user", "restart", TELEGRAM_SERVICE_NAME], check=True)
+
+
+def remove_telegram_service() -> bool:
+    if is_container_runtime():
+        request_container_reload()
+        return False
+    path = telegram_service_path()
+    if shutil.which("systemctl"):
+        subprocess.run(
+            ["systemctl", "--user", "disable", "--now", TELEGRAM_SERVICE_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    existed = path.exists()
+    path.unlink(missing_ok=True)
+    if shutil.which("systemctl"):
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     return existed
 
 

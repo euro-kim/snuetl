@@ -55,6 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_display_mode(login)
     add_agent_flags(login)
 
+    api = subparsers.add_parser("api", help="manage personal Canvas API access")
+    add_agent_flags(api)
+    api_subparsers = api.add_subparsers(dest="api_command", parser_class=SnuetlArgumentParser)
+    for name in ("setup", "rotate"):
+        action = api_subparsers.add_parser(name, help=f"{name} Canvas API access")
+        add_display_mode(action)
+        add_agent_flags(action)
+    add_agent_flags(api_subparsers.add_parser("status", help="show Canvas API access status"))
+
     headless = subparsers.add_parser("headless", help="show or set the default browser mode")
     headless.add_argument(
         "mode",
@@ -206,6 +215,32 @@ def build_parser() -> argparse.ArgumentParser:
         add_display_mode(command)
         add_agent_flags(command)
 
+    for name, description in (
+        ("upcoming", "list upcoming incomplete work"),
+        ("missing", "list overdue missing submissions"),
+        ("submissions", "list your assignment submission states"),
+        ("grades", "show your available course grades"),
+        ("calendar", "list course calendar events"),
+        ("discussions", "list course discussion topics"),
+        ("activity", "list new activity in active courses"),
+        ("announcements", "list recent course announcements"),
+        ("modules", "show course modules and your progress"),
+        ("feedback", "show recently graded work and instructor feedback"),
+        ("dashboard", "summarize active courses, imminent work, missing work, and grades"),
+    ):
+        command = subparsers.add_parser(name, help=description)
+        if name in {
+            "submissions", "grades", "discussions", "activity", "announcements",
+            "modules", "feedback", "dashboard",
+        }:
+            command.add_argument("course", nargs="?", help="course ID or unique title")
+        if name in {"upcoming", "calendar", "activity", "announcements", "dashboard"}:
+            command.add_argument("--from", dest="start_date", help="start date (YYYY-MM-DD)")
+            command.add_argument("--to", dest="end_date", help="end date (YYYY-MM-DD)")
+        if name == "feedback":
+            command.add_argument("--since", dest="start_date", help="graded since (YYYY-MM-DD)")
+        add_agent_flags(command)
+
     logout = subparsers.add_parser(
         "logout", help="remove browser authentication and saved credentials"
     )
@@ -282,8 +317,28 @@ def build_parser() -> argparse.ArgumentParser:
         dest="discord_owner_command", parser_class=SnuetlArgumentParser, required=True
     )
     add_agent_flags(owner_subparsers.add_parser("list", help="list authorized owner IDs"))
-    for action in ("add", "remove"):
-        owner_command = owner_subparsers.add_parser(action, help=f"{action} an authorized owner")
+    for owner_action in ("add", "remove"):
+        owner_command = owner_subparsers.add_parser(
+            owner_action, help=f"{owner_action} an authorized owner"
+        )
         owner_command.add_argument("user_id", type=int)
         add_agent_flags(owner_command)
+
+    telegram = subparsers.add_parser("telegram", help="configure and run Telegram remote control")
+    telegram_subparsers = telegram.add_subparsers(
+        dest="telegram_command", parser_class=SnuetlArgumentParser
+    )
+    add_agent_flags(telegram)
+    for name, description in (
+        ("setup", "pair a private Telegram chat and install its service"),
+        ("guide", "show BotFather setup steps"),
+        ("run", "run the Telegram bot in the foreground"),
+        ("status", "show Telegram configuration and daemon state"),
+        ("enable", "enable and start the Telegram daemon"),
+        ("disable", "stop and disable the Telegram daemon"),
+    ):
+        add_agent_flags(telegram_subparsers.add_parser(name, help=description))
+    alerts = telegram_subparsers.add_parser("alerts", help="enable or disable daily digests")
+    alerts.add_argument("mode", choices=("on", "off"))
+    add_agent_flags(alerts)
     return parser

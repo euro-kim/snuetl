@@ -32,9 +32,12 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["mypy>=1.14,<2", "pytest>=8,<10", "ruff>=0.9,<1"]
+codex-desktop = ["keyring>=25,<27", "tzdata>=2025.2"]
+codex-build = ["keyring>=25,<27", "tzdata>=2025.2", "pyinstaller>=6.14,<7"]
 
 [project.scripts]
 snuetl = "snuetl.cli:main"
+snuetl-codex = "snuetl.codex_desktop:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/snuetl"]
@@ -73,6 +76,10 @@ files = [
   "src/snuetl/media.py",
   "src/snuetl/routing.py",
   "src/snuetl/runtime.py",
+  "src/snuetl/state.py",
+  "src/snuetl/telegram_api.py",
+  "src/snuetl/telegram_bot.py",
+  "src/snuetl/telegram_setup.py",
 ]
 check_untyped_defs = true
 no_implicit_optional = true

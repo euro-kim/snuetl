@@ -30,6 +30,10 @@ class UninstallInventory:
     def discord_service_path(self) -> Path:
         return self.service_path.with_name("snuetl-discord.service")
 
+    @property
+    def telegram_service_path(self) -> Path:
+        return self.service_path.with_name("snuetl-telegram.service")
+
 
 @dataclass(slots=True)
 class UninstallSummary:
@@ -89,7 +93,12 @@ def inventory_data(value: UninstallInventory) -> dict[str, object]:
         "tracked_bytes": sum(path.stat().st_size for path in existing),
         "systemd_units": [
             str(path)
-            for path in (value.service_path, value.timer_path, value.discord_service_path)
+            for path in (
+                value.service_path,
+                value.timer_path,
+                value.discord_service_path,
+                value.telegram_service_path,
+            )
             if path.exists()
         ],
         "playwright_browser_installed_by_snuetl": value.provenance.playwright_browser,
@@ -106,6 +115,8 @@ def _remove_timer(inventory: UninstallInventory, summary: UninstallSummary) -> N
             units.append("snuetl.timer")
         if inventory.discord_service_path.exists():
             units.append("snuetl-discord.service")
+        if inventory.telegram_service_path.exists():
+            units.append("snuetl-telegram.service")
         for unit in units:
             subprocess.run(
                 [systemctl, "--user", "disable", "--now", unit],
@@ -116,6 +127,7 @@ def _remove_timer(inventory: UninstallInventory, summary: UninstallSummary) -> N
     inventory.timer_path.unlink(missing_ok=True)
     inventory.service_path.unlink(missing_ok=True)
     inventory.discord_service_path.unlink(missing_ok=True)
+    inventory.telegram_service_path.unlink(missing_ok=True)
     if systemctl:
         subprocess.run([systemctl, "--user", "daemon-reload"], check=False)
         subprocess.run([systemctl, "--user", "reset-failed"], check=False)

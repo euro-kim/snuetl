@@ -2,6 +2,11 @@ FROM python:3.12-bookworm
 
 ARG SNUETL_UID=1000
 ARG SNUETL_GID=1000
+ARG SNUETL_SOURCE_REVISION=unknown
+ARG SNUETL_PACKAGE_VERSION=unknown
+
+LABEL org.opencontainers.image.revision="${SNUETL_SOURCE_REVISION}" \
+      org.opencontainers.image.version="${SNUETL_PACKAGE_VERSION}"
 
 ENV HOME=/home/snuetl \
     XDG_CONFIG_HOME=/home/snuetl/.config \

@@ -61,3 +61,8 @@ def container_supervisor_is_active() -> bool:
 def container_discord_is_active() -> bool:
     status = read_container_status()
     return bool(status and status.get("discord_active"))
+
+
+def container_telegram_is_active() -> bool:
+    status = read_container_status()
+    return bool(status and status.get("telegram_active"))

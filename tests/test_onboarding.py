@@ -118,6 +118,7 @@ def test_setup_prompts_for_and_secures_video_storage_separately(
     assert prompts[0].startswith("Where should regular course files")
     assert prompts[1].startswith("Where should large video downloads")
     assert configured.download_dir == regular
+    assert configured.canvas_api_enabled is False
     assert configured_video_directory(configured) == videos
     assert has_separate_video_directory(configured) is True
     assert stat.S_IMODE(regular.stat().st_mode) == 0o700

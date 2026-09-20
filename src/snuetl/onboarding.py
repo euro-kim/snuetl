@@ -12,6 +12,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from .browser import _playwright, interactive_login
+from .canvas_api import ensure_token, token_status
 from .catalog import inspect_catalog
 from .config import Config, default_config_path, load_config, save_config
 from .credentials import SavedCredentials, load_credentials, save_credentials
@@ -24,11 +25,18 @@ from .directory_manager import (
     plan_directory_migration,
     set_video_directory,
 )
-from .errors import AuthenticationRequired
+from .errors import AuthenticationRequired, DiscoveryError
 from .profile import profile_lock
 from .provenance import record_apt_package, record_playwright_browser
 from .runtime import container_supervisor_is_active, is_container_runtime
-from .scheduler import discord_service_is_enabled, install_discord_service, timer_is_enabled
+from .scheduler import (
+    discord_service_is_enabled,
+    install_discord_service,
+    install_telegram_service,
+    telegram_service_is_active,
+    telegram_service_is_enabled,
+    timer_is_enabled,
+)
 from .ui import (
     choose_checkbox,
     console,
@@ -365,6 +373,13 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
             download_dir=config.download_dir,
             write_dirs=tuple(route.destination for route in config.directory_routes),
         )
+    if config.telegram.enabled and platform.system() == "Linux" and telegram_service_is_enabled():
+        install_telegram_service(
+            path,
+            state_dir=config.state_dir,
+            download_dir=config.download_dir,
+            write_dirs=tuple(route.destination for route in config.directory_routes),
+        )
     console.print(f"[green]✓[/green] Configuration staged at [dim]{path}[/dim]")
     if migration.moved:
         console.print(
@@ -404,6 +419,21 @@ def run_setup(config_path: Path | None = None, *, force_headless: bool | None = 
             prompt_login(config, headless=login_headless)
         result = inspect_catalog(config, kind="courses", headless=True)
     print_catalog(result, "courses")
+
+    if config.canvas_api_enabled is None:
+        enabled = _confirm("Set up Canvas API access for snuetl?", default=True)
+        config = replace(config, canvas_api_enabled=enabled)
+        save_config(config, path)
+    if config.canvas_api_enabled:
+        try:
+            token = ensure_token(config, headless=login_headless)
+            console.print(
+                f"[green]✓[/green] Canvas API access ready through {token.expires_at[:10]}"
+            )
+        except (AuthenticationRequired, DiscoveryError) as exc:
+            console.print(
+                f"[yellow]![/yellow] Canvas API setup unavailable: {exc}. Retry with [cyan]snuetl api setup[/cyan]."
+            )
 
     config = replace(config, setup_complete=True)
     save_config(config, path)
@@ -451,6 +481,18 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
             f"saved for {saved.username}" if saved else "credentials not saved",
         )
     )
+    api = token_status(config)
+    checks.append(
+        (
+            "Canvas API (optional)",
+            bool(api.get("ready")),
+            "different eTL profile; run snuetl api setup"
+            if api.get("profile_mismatch")
+            else "configured"
+            if api.get("configured")
+            else "run snuetl api setup",
+        )
+    )
     if platform.system() == "Linux":
         if is_container_runtime():
             active = container_supervisor_is_active()
@@ -458,9 +500,7 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
                 (
                     "Docker Compose supervisor",
                     active,
-                    "active; synchronization is Discord-triggered"
-                    if active
-                    else "not active",
+                    "active; gateway commands trigger synchronization" if active else "not active",
                 )
             )
         else:
@@ -470,6 +510,15 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
                     "15-minute timer (optional)",
                     enabled,
                     "enabled" if enabled else "not enabled",
+                )
+            )
+        if config.telegram.configured:
+            active = telegram_service_is_active()
+            checks.append(
+                (
+                    "Telegram service (optional)",
+                    telegram_service_is_enabled() and active,
+                    "active" if active else "not active",
                 )
             )
 

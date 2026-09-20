@@ -129,7 +129,18 @@ def persist_auth_state(context: Any, config: Config, landing_url: str) -> None:
     parts = urlsplit(landing_url)
     if (parts.hostname or "").lower() == "myetl.snu.ac.kr":
         landing_url = f"{parts.scheme}://{parts.netloc}/"
-    _atomic_private_json(config.session_metadata_path, {"landing_url": landing_url})
+    metadata: dict[str, str] = {"landing_url": landing_url}
+    try:
+        origin = f"{parts.scheme}://{parts.netloc}"
+        response = context.request.get(f"{origin}/api/v1/users/self/profile", timeout=15_000)
+        if response.status == 200:
+            raw = re.sub(r"^\s*while\s*\(\s*1\s*\)\s*;\s*", "", response.text(), count=1)
+            profile = json.loads(raw)
+            if isinstance(profile, dict) and profile.get("id") is not None:
+                metadata["user_id"] = str(profile["id"])
+    except Exception:
+        pass
+    _atomic_private_json(config.session_metadata_path, metadata)
 
 
 def authenticated_entry_url(config: Config) -> str:

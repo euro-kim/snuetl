@@ -5,7 +5,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .models import ContentItem, Course, ModuleItem, RemoteFile, StoredFile
@@ -25,6 +25,7 @@ class DiscordJob:
     channel_id: int | None = None
     message_id: int | None = None
     error: str | None = None
+    gateway: str = "discord"
 
 
 def utc_now() -> str:
@@ -184,10 +185,24 @@ class StateStore:
                 progress TEXT,
                 channel_id INTEGER,
                 message_id INTEGER,
-                error TEXT
+                error TEXT,
+                gateway TEXT NOT NULL DEFAULT 'discord'
             );
             CREATE INDEX IF NOT EXISTS discord_jobs_status_idx
                 ON discord_jobs(status, created_at);
+            CREATE TABLE IF NOT EXISTS telegram_updates (
+                update_id INTEGER PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS telegram_poll_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                last_update_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS telegram_digest (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                last_sent_date TEXT,
+                last_error_date TEXT
+            );
             """
         )
         # Columns are added independently so databases created by pre-catalog
@@ -200,6 +215,7 @@ class StateStore:
         self._ensure_column("catalog_files", "content_type", "TEXT")
         self._ensure_column("catalog_content_items", "updated_at", "TEXT")
         self._ensure_column("catalog_content_items", "body_html", "TEXT")
+        self._ensure_column("discord_jobs", "gateway", "TEXT NOT NULL DEFAULT 'discord'")
         self.db.commit()
 
     @staticmethod
@@ -218,6 +234,7 @@ class StateStore:
             channel_id=int(row["channel_id"]) if row["channel_id"] else None,
             message_id=int(row["message_id"]) if row["message_id"] else None,
             error=str(row["error"]) if row["error"] else None,
+            gateway=str(row["gateway"]),
         )
 
     def create_discord_job(
@@ -229,21 +246,36 @@ class StateStore:
         *,
         channel_id: int | None = None,
     ) -> DiscordJob:
-        if command not in {"refresh", "sync", "pull", "login"}:
-            raise ValueError(f"unsupported Discord job command: {command}")
+        return self.create_remote_job(
+            "discord", job_id, command, arguments, requester_id, channel_id=channel_id
+        )
+
+    def create_remote_job(
+        self,
+        gateway: str,
+        job_id: str,
+        command: str,
+        arguments: dict[str, object],
+        requester_id: int,
+        *,
+        channel_id: int | None = None,
+    ) -> DiscordJob:
+        commands = {"discord": {"refresh", "sync", "pull", "login"}, "telegram": {"sync"}}
+        if gateway not in commands or command not in commands[gateway]:
+            raise ValueError(f"unsupported {gateway} job command: {command}")
         forbidden = {"token", "password", "passwd", "cookie", "verification_code", "code"}
         if any(str(key).casefold() in forbidden for key in arguments):
-            raise ValueError("Discord job arguments must not contain secrets")
+            raise ValueError("remote job arguments must not contain secrets")
         queued = self.db.execute(
-            "SELECT COUNT(*) FROM discord_jobs WHERE status='queued'"
+            "SELECT COUNT(*) FROM discord_jobs WHERE status='queued' AND gateway=?", (gateway,)
         ).fetchone()[0]
         if int(queued) >= 10:
-            raise ValueError("Discord job queue is full")
+            raise ValueError(f"{gateway} job queue is full")
         now = utc_now()
         self.db.execute(
             """INSERT INTO discord_jobs(
-                 job_id, command, arguments_json, requester_id, status, created_at, channel_id
-               ) VALUES (?, ?, ?, ?, 'queued', ?, ?)""",
+                 job_id, command, arguments_json, requester_id, status, created_at, channel_id, gateway
+               ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)""",
             (
                 job_id,
                 command,
@@ -251,6 +283,7 @@ class StateStore:
                 requester_id,
                 now,
                 channel_id,
+                gateway,
             ),
         )
         self.db.commit()
@@ -259,8 +292,12 @@ class StateStore:
         return self._discord_job(row)
 
     def list_discord_jobs(self, *, limit: int = 20) -> list[DiscordJob]:
+        return self.list_remote_jobs("discord", limit=limit)
+
+    def list_remote_jobs(self, gateway: str, *, limit: int = 20) -> list[DiscordJob]:
         rows = self.db.execute(
-            "SELECT * FROM discord_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM discord_jobs WHERE gateway=? ORDER BY created_at DESC LIMIT ?",
+            (gateway, limit),
         ).fetchall()
         return [self._discord_job(row) for row in rows]
 
@@ -269,22 +306,35 @@ class StateStore:
         return self._discord_job(row) if row is not None else None
 
     def next_discord_job(self) -> DiscordJob | None:
-        row = self.db.execute(
-            """SELECT * FROM discord_jobs WHERE status='queued'
-               ORDER BY created_at LIMIT 1"""
-        ).fetchone()
-        if row is None:
-            return None
-        now = utc_now()
-        cursor = self.db.execute(
-            """UPDATE discord_jobs SET status='running', started_at=?
-               WHERE job_id=? AND status='queued'""",
-            (now, row["job_id"]),
-        )
-        self.db.commit()
-        if cursor.rowcount != 1:
-            return None
-        return self.get_discord_job(str(row["job_id"]))
+        return self.next_remote_job("discord")
+
+    def next_remote_job(self, gateway: str) -> DiscordJob | None:
+        # A write transaction makes the cross-process check and claim atomic.
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            active = self.db.execute(
+                "SELECT 1 FROM discord_jobs WHERE status IN ('running', 'cancel_requested') LIMIT 1"
+            ).fetchone()
+            if active is not None:
+                self.db.commit()
+                return None
+            row = self.db.execute(
+                """SELECT * FROM discord_jobs WHERE status='queued' AND gateway=?
+                   ORDER BY created_at LIMIT 1""",
+                (gateway,),
+            ).fetchone()
+            if row is None:
+                self.db.commit()
+                return None
+            self.db.execute(
+                "UPDATE discord_jobs SET status='running', started_at=? WHERE job_id=?",
+                (utc_now(), row["job_id"]),
+            )
+            self.db.commit()
+            return self.get_discord_job(str(row["job_id"]))
+        except Exception:
+            self.db.rollback()
+            raise
 
     def update_discord_job(
         self,
@@ -330,25 +380,97 @@ class StateStore:
         self.db.commit()
 
     def request_discord_job_cancel(self, job_id: str) -> bool:
+        return self.request_remote_job_cancel(job_id, "discord")
+
+    def request_remote_job_cancel(self, job_id: str, gateway: str) -> bool:
         cursor = self.db.execute(
             """UPDATE discord_jobs SET status=CASE
                  WHEN status='queued' THEN 'cancelled' ELSE 'cancel_requested' END,
                  finished_at=CASE WHEN status='queued' THEN ? ELSE finished_at END
-               WHERE job_id=? AND status IN ('queued', 'running')""",
-            (utc_now(), job_id),
+               WHERE job_id=? AND gateway=? AND status IN ('queued', 'running')""",
+            (utc_now(), job_id, gateway),
         )
         self.db.commit()
         return cursor.rowcount == 1
 
     def interrupt_discord_jobs(self) -> int:
+        return self.interrupt_remote_jobs("discord")
+
+    def interrupt_remote_jobs(self, gateway: str) -> int:
         cursor = self.db.execute(
             """UPDATE discord_jobs SET status='interrupted', finished_at=?,
-                 error='Discord daemon restarted before this job completed'
-               WHERE status IN ('queued', 'running', 'cancel_requested')""",
-            (utc_now(),),
+                 error=?
+               WHERE gateway=? AND status IN ('queued', 'running', 'cancel_requested')""",
+            (
+                utc_now(),
+                f"{gateway.capitalize()} daemon restarted before this job completed",
+                gateway,
+            ),
         )
         self.db.commit()
         return cursor.rowcount
+
+    def telegram_update_seen(self, update_id: int) -> bool:
+        return (
+            self.db.execute(
+                "SELECT 1 FROM telegram_updates WHERE update_id=?", (update_id,)
+            ).fetchone()
+            is not None
+        )
+
+    def reset_telegram_state(self) -> None:
+        self.db.execute("DELETE FROM telegram_updates")
+        self.db.execute("DELETE FROM telegram_poll_state")
+        self.db.execute("DELETE FROM telegram_digest")
+        self.db.commit()
+
+    def record_telegram_update(self, update_id: int) -> None:
+        self.db.execute(
+            "INSERT OR IGNORE INTO telegram_updates(update_id, processed_at) VALUES (?, ?)",
+            (update_id, utc_now()),
+        )
+        self.db.execute(
+            "DELETE FROM telegram_updates WHERE processed_at < ?",
+            ((datetime.now(UTC) - timedelta(days=30)).isoformat(),),
+        )
+        self.db.execute("INSERT OR IGNORE INTO telegram_poll_state(singleton) VALUES (1)")
+        self.db.execute(
+            "UPDATE telegram_poll_state SET last_update_id=? WHERE singleton=1", (update_id,)
+        )
+        self.db.commit()
+
+    def telegram_poll_offset(self) -> int | None:
+        row = self.db.execute(
+            "SELECT last_update_id FROM telegram_poll_state WHERE singleton=1"
+        ).fetchone()
+        value = row[0] if row is not None else None
+        if value is None:
+            return None
+        processed = self.db.execute(
+            "SELECT processed_at FROM telegram_updates WHERE update_id=?", (value,)
+        ).fetchone()
+        if processed is None:
+            return None
+        if datetime.fromisoformat(str(processed[0])) < datetime.now(UTC) - timedelta(days=3):
+            # Telegram may choose a fresh, lower update ID after a quiet week.
+            return None
+        return int(value) + 1
+
+    def telegram_digest_dates(self) -> tuple[str | None, str | None]:
+        row = self.db.execute(
+            "SELECT last_sent_date, last_error_date FROM telegram_digest WHERE singleton=1"
+        ).fetchone()
+        return (
+            (str(row[0]) if row[0] else None, str(row[1]) if row[1] else None)
+            if row
+            else (None, None)
+        )
+
+    def mark_telegram_digest(self, day: str, *, error: bool = False) -> None:
+        column = "last_error_date" if error else "last_sent_date"
+        self.db.execute("INSERT OR IGNORE INTO telegram_digest(singleton) VALUES (1)")
+        self.db.execute(f"UPDATE telegram_digest SET {column}=? WHERE singleton=1", (day,))
+        self.db.commit()
 
     def _ensure_column(self, table: str, column: str, declaration: str) -> None:
         existing = {row["name"] for row in self.db.execute(f"PRAGMA table_info({table})")}
@@ -369,6 +491,7 @@ class StateStore:
             "INSERT INTO runs(started_at, status) VALUES (?, 'running')", (utc_now(),)
         )
         self.db.commit()
+        assert cursor.lastrowid is not None
         return int(cursor.lastrowid)
 
     def finish_run(

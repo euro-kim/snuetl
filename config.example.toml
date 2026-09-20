@@ -3,6 +3,8 @@
 base_url = "https://etl.snu.ac.kr/login"
 download_dir = "~/Downloads/snuetl"
 setup_complete = false
+# Set by guided setup after the Canvas API access prompt.
+# canvas_api_enabled = true
 # state_dir = "~/.local/state/snuetl"
 
 [browser]
@@ -18,3 +20,10 @@ login_timeout_seconds = 600
 timeout_seconds = 45
 retry_count = 3
 excluded_course_ids = []
+
+[telegram]
+# Run `snuetl telegram setup` to pair a private chat; it fills in the IDs.
+enabled = false
+owner_id = ""
+chat_id = ""
+alerts_enabled = true

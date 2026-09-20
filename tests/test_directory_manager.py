@@ -3,6 +3,8 @@ import stat
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from snuetl.cli import main
 from snuetl.config import load_config, save_config
 from snuetl.directory_manager import (
@@ -167,6 +169,18 @@ def test_managed_directory_adds_only_missing_owner_access(tmp_path: Path) -> Non
     assert stat.S_IMODE(root.stat().st_mode) == 0o755
 
 
+def test_container_rejects_unusable_mount_without_changing_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "mounted-read-only"
+    root.mkdir(mode=0o555)
+    root.chmod(0o555)
+    monkeypatch.setenv("SNUETL_RUNTIME", "container")
+    with pytest.raises(PermissionError, match="mounted directory"):
+        secure_managed_directory(root)
+    assert stat.S_IMODE(root.stat().st_mode) == 0o555
+
+
 def test_directory_list_warns_without_changing_unsafe_permissions(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "config.toml"
     root = tmp_path / "shared"
@@ -184,9 +198,7 @@ def test_directory_list_warns_without_changing_unsafe_permissions(tmp_path: Path
     assert stat.S_IMODE(root.stat().st_mode) == 0o555
 
 
-def test_directory_set_preserves_existing_usable_permissions(
-    tmp_path: Path, capsys
-) -> None:
+def test_directory_set_preserves_existing_usable_permissions(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "config.toml"
     target = tmp_path / "target"
     target.mkdir(mode=0o755)

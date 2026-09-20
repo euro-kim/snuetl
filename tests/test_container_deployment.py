@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,8 @@ def test_compose_keeps_one_named_interactive_hardened_container() -> None:
     assert service["init"] is True
     assert service["restart"] == "unless-stopped"
     assert service["read_only"] is True
+    assert service["image"] == "${SNUETL_IMAGE:-snuetl:local}"
+    assert "SNUETL_SOURCE_REVISION" in service["build"]["args"]
     assert service["ipc"] == "host"
     assert "ports" not in service
     assert "privileged" not in service
@@ -49,13 +52,14 @@ def test_docker_setup_script_owns_the_complete_bootstrap_workflow() -> None:
     assert 'cp -- "$ENV_EXAMPLE" "$ENV_FILE"' in script
     assert "set_env_value SNUETL_UID" in script
     assert "set_env_value SNUETL_GID" in script
-    assert 'run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"' in script
-    assert 'run_privileged chmod 0700 -- "$path"' in script
-    assert "compose down --remove-orphans" in script
+    assert 'run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"' not in script
+    assert 'run_privileged chmod 0700 -- "$path"' not in script
+    assert 'install -d -m 0700 -- "$path"' in script
+    assert "compose down --remove-orphans" not in script
     assert "compose build --pull --no-cache snuetl" in script
-    assert "compose up -d --force-recreate --remove-orphans snuetl" in script
+    assert "compose up -d --no-build --force-recreate --remove-orphans snuetl" in script
     assert script.index("compose build --pull --no-cache snuetl") < script.index(
-        "compose down --remove-orphans"
+        "compose up -d --no-build"
     )
     assert "docker system prune" not in script
     assert "compose down -v" not in script
@@ -69,6 +73,9 @@ def test_docker_update_script_guards_and_explains_the_update_lifecycle() -> None
     assert "status --porcelain --untracked-files=normal" in script
     assert 'fetch --prune "$REMOTE_NAME" "$DEPLOY_BRANCH"' in script
     assert 'merge-base --is-ancestor "$local_revision" "$remote_revision"' in script
+    assert '"$deployed_revision" == "$remote_revision"' in script
+    assert '"$old_image_id" == "$tag_image_id"' in script
+    assert 'tag "$old_image_id" "$image_tag"' in script
     assert 'merge --ff-only "$remote_revision"' in script
     assert 'git -C "$SCRIPT_DIR" reset' not in script
     assert 'setup_arguments=(--yes --env-file "$ENV_FILE")' in script
@@ -80,7 +87,9 @@ def test_docker_update_script_fast_forwards_and_delegates_rebuild(tmp_path: Path
     project = tmp_path / "project"
     project.mkdir()
     shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
-    (project / ".env").touch()
+    (project / ".env").write_text(
+        "SNUETL_CONTAINER_NAME=snuetl\nSNUETL_IMAGE=snuetl:snuetl\n", encoding="utf-8"
+    )
 
     setup_log = tmp_path / "setup.log"
     fake_setup = project / "docker-setup.sh"
@@ -120,7 +129,14 @@ esac
     )
     fake_git.chmod(0o755)
     fake_docker = fake_bin / "docker"
-    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+if [[ "$*" == *'ps --all -q snuetl'* && -f "$FAKE_SETUP_LOG" ]]; then echo new-container; fi
+if [[ "$*" == *'inspect --format {{.Image}} new-container'* ]]; then echo new-image; fi
+if [[ "$*" == *'image inspect --format {{index .Config.Labels "org.opencontainers.image.revision"}} new-image'* ]]; then echo "$FAKE_REMOTE_REVISION"; fi
+""",
+        encoding="utf-8",
+    )
     fake_docker.chmod(0o755)
 
     local_revision = "1" * 40
@@ -161,15 +177,20 @@ esac
     assert f"merge --ff-only {remote_revision}" in commands
 
 
-def test_docker_update_script_skips_rebuild_when_source_is_current(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stale_image", [False, True])
+def test_docker_update_checks_running_image_even_when_source_is_current(
+    tmp_path: Path, stale_image: bool
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
     shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
-    (project / ".env").touch()
+    (project / ".env").write_text(
+        "SNUETL_CONTAINER_NAME=snuetl\nSNUETL_IMAGE=snuetl:snuetl\n", encoding="utf-8"
+    )
     setup_marker = tmp_path / "setup-was-called"
     fake_setup = project / "docker-setup.sh"
     fake_setup.write_text(
-        "#!/usr/bin/env bash\ntouch \"$FAKE_SETUP_MARKER\"\n",
+        '#!/usr/bin/env bash\ntouch "$FAKE_SETUP_MARKER"\n',
         encoding="utf-8",
     )
     fake_setup.chmod(0o755)
@@ -194,7 +215,27 @@ esac
     )
     fake_git.chmod(0o755)
     fake_docker = fake_bin / "docker"
-    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+if [[ -f "$FAKE_SETUP_MARKER" ]]; then
+  case "$*" in
+    *'ps --all -q snuetl'*) echo new-container ;;
+    *'inspect --format {{.Image}} new-container'*) echo new-image ;;
+    *'image inspect --format {{index .Config.Labels "org.opencontainers.image.revision"}} new-image'*) echo "$FAKE_REVISION" ;;
+  esac
+  exit 0
+fi
+case "$*" in
+  *'ps --all -q snuetl'*) echo current-container ;;
+  *'inspect --format {{.Image}} current-container'*) echo current-image ;;
+  *'inspect --format {{.State.Status}} current-container'*) echo running ;;
+  *'inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} current-container'*) echo healthy ;;
+  *'image inspect --format {{index .Config.Labels "org.opencontainers.image.revision"}} current-image'*) echo "$FAKE_DEPLOYED_REVISION" ;;
+  *'image inspect --format {{.Id}} snuetl:snuetl'*) echo current-image ;;
+esac
+""",
+        encoding="utf-8",
+    )
     fake_docker.chmod(0o755)
 
     environment = os.environ.copy()
@@ -203,6 +244,7 @@ esac
             "PATH": f"{fake_bin}:{environment['PATH']}",
             "FAKE_PROJECT": str(project),
             "FAKE_REVISION": "3" * 40,
+            "FAKE_DEPLOYED_REVISION": ("2" if stale_image else "3") * 40,
             "FAKE_SETUP_MARKER": str(setup_marker),
         }
     )
@@ -215,16 +257,92 @@ esac
     )
 
     assert result.returncode == 0, result.stderr
-    assert "No rebuild is necessary" in result.stdout
-    assert not setup_marker.exists()
+    if stale_image:
+        assert "deployed image is stale" in result.stdout
+        assert setup_marker.exists()
+    else:
+        assert "no rebuild is necessary" in result.stdout
+        assert not setup_marker.exists()
 
 
+def test_docker_update_restores_prior_image_after_failed_deployment(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
+    (project / ".env").write_text(
+        "SNUETL_CONTAINER_NAME=snuetl\nSNUETL_IMAGE=snuetl:snuetl\n", encoding="utf-8"
+    )
+    failed_marker = tmp_path / "failed-setup"
+    setup = project / "docker-setup.sh"
+    setup.write_text('#!/usr/bin/env bash\ntouch "$FAILED_MARKER"\nexit 1\n', encoding="utf-8")
+    setup.chmod(0o755)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git = fake_bin / "git"
+    git.write_text(
+        """#!/usr/bin/env bash
+args=("$@")
+if [[ "${args[0]}" == -C ]]; then args=("${args[@]:2}"); fi
+case "${args[*]}" in
+  'rev-parse --show-toplevel') echo "$FAKE_PROJECT" ;;
+  'symbolic-ref --quiet --short HEAD') echo main ;;
+  'remote get-url origin') echo git@example.test:snuetl.git ;;
+  'rev-parse HEAD'|'rev-parse FETCH_HEAD') echo "$FAKE_REVISION" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+    docker_log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$*" in
+  *'ps --all -q snuetl'*) if [[ -f "$FAILED_MARKER" ]]; then echo restored-container; else echo old-container; fi ;;
+  *'inspect --format {{.Image}} old-container'*) echo old-image ;;
+  *'inspect --format {{.Image}} restored-container'*) echo old-image ;;
+  *'inspect --format {{.State.Status}} old-container'*) echo running ;;
+  *'inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} old-container'*) echo healthy ;;
+  *'inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restored-container'*) echo healthy ;;
+  *'image inspect --format {{index .Config.Labels "org.opencontainers.image.revision"}} old-image'*) echo stale ;;
+  *'image inspect --format {{.Id}} snuetl:snuetl'*) echo old-image ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "FAKE_PROJECT": str(project),
+            "FAKE_REVISION": "3" * 40,
+            "FAILED_MARKER": str(failed_marker),
+            "FAKE_DOCKER_LOG": str(docker_log),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(project / "docker-update.sh"), "--yes"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 1
+    assert "was restored and is healthy" in result.stderr
+    commands = docker_log.read_text(encoding="utf-8")
+    assert "tag old-image snuetl:snuetl" in commands
+    assert "up -d --no-build --force-recreate snuetl" in commands
+
+
+@pytest.mark.parametrize("existing_private", [False, True])
 def test_docker_setup_script_prepares_storage_and_starts_a_fresh_image(
     tmp_path: Path,
+    existing_private: bool,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    for name in ("docker-setup.sh", ".env.example", "compose.yaml"):
+    for name in ("docker-setup.sh", ".env.example", "compose.yaml", "pyproject.toml"):
         shutil.copy2(ROOT / name, project / name)
 
     env_file = project / ".env"
@@ -262,6 +380,11 @@ fi
         directory = project / "docker-data" / name
         directory.mkdir(parents=True)
         directory.chmod(0o755)
+    if existing_private:
+        for name in ("config", "state"):
+            directory = project / "docker-data" / name
+            directory.mkdir(parents=True)
+            directory.chmod(0o755)
 
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
@@ -287,15 +410,15 @@ fi
     assert values["SNUETL_GID"] == str(os.getgid())
     for name in ("config", "state"):
         directory = project / "docker-data" / name
-        assert directory.stat().st_mode & 0o777 == 0o700
+        assert directory.stat().st_mode & 0o777 == (0o755 if existing_private else 0o700)
     for name in ("downloads", "videos"):
         directory = project / "docker-data" / name
         assert directory.stat().st_mode & 0o777 == 0o755
 
     commands = docker_log.read_text(encoding="utf-8")
-    assert "down --remove-orphans" in commands
+    assert "down --remove-orphans" not in commands
     assert "build --pull --no-cache snuetl" in commands
-    assert "up -d --force-recreate --remove-orphans snuetl" in commands
+    assert "up -d --no-build --force-recreate --remove-orphans snuetl" in commands
     assert "ps --all -q snuetl" in commands
     assert "Docker daemon access requires sudo" not in result.stdout
     assert "Deployment is healthy" in result.stdout
@@ -308,6 +431,7 @@ def test_container_build_installs_runtime_and_drops_root() -> None:
     assert "playwright install --with-deps chromium" in dockerfile
     assert "apt-get install --yes --no-install-recommends ffmpeg" in dockerfile
     assert "USER snuetl" in dockerfile
+    assert 'org.opencontainers.image.revision="${SNUETL_SOURCE_REVISION}"' in dockerfile
     assert 'CMD ["python", "-m", "snuetl.container_runtime"]' in dockerfile
 
 
@@ -320,6 +444,7 @@ def test_env_template_contains_only_non_secret_deployment_settings() -> None:
 
     assert set(values) == {
         "SNUETL_CONTAINER_NAME",
+        "SNUETL_IMAGE",
         "SNUETL_UID",
         "SNUETL_GID",
         "SNUETL_TIMEZONE",
@@ -340,7 +465,6 @@ def test_playwright_seccomp_profile_supports_x86_and_arm_user_namespaces() -> No
     assert {"SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"} <= architectures
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
     assert any(
-        {"clone", "setns", "unshare"} <= set(entry["names"])
-        and entry["action"] == "SCMP_ACT_ALLOW"
+        {"clone", "setns", "unshare"} <= set(entry["names"]) and entry["action"] == "SCMP_ACT_ALLOW"
         for entry in profile["syscalls"]
     )

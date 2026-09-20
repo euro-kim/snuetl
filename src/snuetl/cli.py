@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import platform
 import shutil
 import sys
 import uuid
 from dataclasses import asdict, replace
+from datetime import date
 from pathlib import Path
 
 from rich.prompt import Confirm
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__
 from .agent import emit, emit_error, envelope
 from .browser_profiles import select_profile, switch_profile
+from .canvas_api import ensure_token, live_data, load_token, revoke_token, token_status
 from .catalog import inspect_catalog, refresh_catalog
 from .cli_parser import CliUsageError, build_parser
 from .cli_runtime import handle_cli_exception
@@ -37,6 +41,7 @@ from .directory_manager import (
     upsert_directory_route,
     validate_managed_root,
 )
+from .errors import AuthenticationRequired, DiscoveryError
 from .logging_utils import configure_logging
 from .onboarding import (
     browser_available,
@@ -55,6 +60,8 @@ from .scheduler import (
     discord_service_is_active,
     discord_service_is_enabled,
     linger_status,
+    telegram_service_is_active,
+    telegram_service_is_enabled,
     timer_is_enabled,
 )
 from .sql_shell import run_sql_shell
@@ -95,6 +102,20 @@ def _login(config: Config, *, headless: bool, config_path: Path | None) -> int:
     config = checked_config
     with profile_lock(config.lock_path):
         prompt_login(config, headless=headless)
+    if config.canvas_api_enabled is None:
+        enabled = Confirm.ask("Set up Canvas API access for snuetl?", default=True)
+        config = replace(config, canvas_api_enabled=enabled)
+        save_config(config, config_path)
+    if config.canvas_api_enabled:
+        try:
+            token = ensure_token(config, headless=headless)
+            console.print(
+                f"[green]Canvas API access ready through {token.expires_at[:10]}.[/green]"
+            )
+        except (AuthenticationRequired, DiscoveryError) as exc:
+            console.print(
+                f"[yellow]![/yellow] Canvas API setup unavailable: {exc}. Retry with [cyan]snuetl api setup[/cyan]."
+            )
     console.print("[green]SNU authentication is ready.[/green]")
     return 0
 
@@ -112,6 +133,20 @@ def _status(config: Config) -> int:
         "Automatic re-login: "
         + (f"[green]enabled[/green] [dim]({saved.username})[/dim]" if saved else "disabled")
     )
+    api = token_status(config)
+    console.print(
+        "Canvas API: "
+        + ("[green]configured[/green]" if api.get("ready") else "[yellow]not ready[/yellow]")
+    )
+    if config.telegram.configured:
+        console.print(
+            "Telegram: "
+            + (
+                "[green]active[/green]"
+                if telegram_service_is_active()
+                else "[yellow]inactive[/yellow]"
+            )
+        )
     if not database_path.exists():
         console.print("Last sync: never")
         console.print("Tracked: 0 active courses, 0 files")
@@ -144,6 +179,7 @@ def _logout(config: Config, confirmed: bool) -> int:
         config.auth_state_path,
         config.session_metadata_path,
         config.credentials_path,
+        config.canvas_token_path,
     )
     if not profile_dir.exists() and not any(path.exists() for path in auth_paths):
         LOGGER.info("dedicated browser authentication is already absent")
@@ -155,6 +191,8 @@ def _logout(config: Config, confirmed: bool) -> int:
     ):
         LOGGER.info("logout cancelled")
         return 0
+    if load_token(config) is not None:
+        revoke_token(config)
     with profile_lock(config.lock_path):
         if profile_dir.exists():
             shutil.rmtree(profile_dir)
@@ -190,6 +228,7 @@ def _status_data(config: Config) -> dict[str, object]:
     data: dict[str, object] = {
         "authentication_ready": auth_ready,
         "automatic_relogin": saved is not None,
+        "canvas_api": token_status(config),
         "saved_username": saved.username if saved else None,
         "state_dir": str(config.state_dir),
         "download_dir": str(config.download_dir),
@@ -212,6 +251,18 @@ def _status_data(config: Config) -> dict[str, object]:
             if platform.system() == "Linux"
             else False,
             "service_active": discord_service_is_active()
+            if platform.system() == "Linux"
+            else False,
+        },
+        "telegram": {
+            "enabled": config.telegram.enabled,
+            "configured": config.telegram.configured,
+            "alerts_enabled": config.telegram.alerts_enabled,
+            "service_manager": "docker_compose" if is_container_runtime() else "systemd",
+            "service_enabled": telegram_service_is_enabled()
+            if platform.system() == "Linux"
+            else False,
+            "service_active": telegram_service_is_active()
             if platform.system() == "Linux"
             else False,
         },
@@ -288,6 +339,14 @@ def _query_data(result: object) -> dict[str, object]:
     }
 
 
+def _live_cell(value: object) -> Text:
+    if value is None:
+        return Text("—")
+    if isinstance(value, (dict, list)):
+        return Text(json.dumps(value, ensure_ascii=False))
+    return Text(str(value))
+
+
 def _capabilities() -> dict[str, object]:
     return {
         "cli": "snuetl",
@@ -295,6 +354,20 @@ def _capabilities() -> dict[str, object]:
         "schema_version": "1",
         "commands": {
             "inspect": ["courses", "files", "articles", "assignments", "quizzes"],
+            "canvas_live": [
+                "upcoming",
+                "missing",
+                "submissions",
+                "grades",
+                "calendar",
+                "discussions",
+                "activity",
+                "announcements",
+                "modules",
+                "feedback",
+                "dashboard",
+            ],
+            "canvas_api": ["setup", "status", "rotate"],
             "sql": {
                 "interactive": "snuetl sql",
                 "noninteractive": ["--execute", "--file", "stdin"],
@@ -316,6 +389,20 @@ def _capabilities() -> dict[str, object]:
                 "cancel",
             ],
             "discord_management": ["guide", "setup", "status", "enable", "disable", "owner"],
+            "telegram": [
+                "status",
+                "upcoming",
+                "missing",
+                "activity",
+                "announcements",
+                "modules",
+                "feedback",
+                "dashboard",
+                "sync",
+                "jobs",
+                "cancel",
+            ],
+            "telegram_management": ["guide", "setup", "status", "enable", "disable", "alerts"],
             "maintenance": [
                 "refresh",
                 "headless",
@@ -327,6 +414,7 @@ def _capabilities() -> dict[str, object]:
                 "update",
                 "uninstall",
                 "discord",
+                "telegram",
             ],
         },
         "agent_flags": ["--json", "--no-input", "--yes", "--dry-run", "--video-id"],
@@ -346,6 +434,7 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
     machine = platform.machine() or "unknown"
     browser_ok, browser_detail = browser_available(config)
     saved = load_credentials(config)
+    api_status = token_status(config)
     permission_reports = configured_directory_permission_reports(config)
     permissions_ok = all(report.safe for report in permission_reports)
     permissions_detail = (
@@ -391,6 +480,18 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
             "detail": saved.username if saved else "disabled",
             "optional": True,
         },
+        {
+            "name": "canvas_api",
+            "ok": bool(api_status.get("ready")),
+            "detail": (
+                "different eTL profile; run snuetl api setup"
+                if api_status.get("profile_mismatch")
+                else "configured"
+                if load_token(config)
+                else "run snuetl api setup"
+            ),
+            "optional": True,
+        },
     ]
     if platform.system() == "Linux":
         if is_container_runtime():
@@ -398,7 +499,7 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
                 {
                     "name": "container_supervisor",
                     "ok": container_supervisor_is_active(),
-                    "detail": "Docker Compose; synchronization is Discord-triggered",
+                    "detail": "Docker Compose; synchronization is gateway-triggered",
                 }
             )
         else:
@@ -431,6 +532,17 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
                         "optional": True,
                     },
                 ]
+            )
+        if config.telegram.configured:
+            checks.append(
+                {
+                    "name": "telegram_service",
+                    "ok": telegram_service_is_enabled() and telegram_service_is_active(),
+                    "detail": "Docker Compose supervisor"
+                    if is_container_runtime()
+                    else "user systemd service",
+                    "optional": True,
+                }
             )
     required = [check for check in checks if not check.get("optional")]
     return {"ready": all(bool(check["ok"]) for check in required), "checks": checks}
@@ -527,17 +639,75 @@ def _run_discord_command(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
-def _refresh_discord_directory_access(config: Config, config_path: Path) -> None:
-    if not config.discord.enabled or not discord_service_is_enabled():
-        return
-    from .scheduler import install_discord_service
-
-    install_discord_service(
-        config_path,
-        state_dir=config.state_dir,
-        download_dir=config.download_dir,
-        write_dirs=tuple(route.destination for route in config.directory_routes),
+def _run_telegram_command(config: Config, args: argparse.Namespace) -> int:
+    from .telegram_setup import (
+        configure_telegram,
+        telegram_setup_guide,
+        telegram_status,
+        toggle_alerts,
+        toggle_telegram,
     )
+
+    action = args.telegram_command or "setup"
+    if action == "guide":
+        data = telegram_setup_guide()
+        emit(envelope("telegram guide", data=data)) if args.json else console.print_json(data=data)
+        return 0
+    if action == "run":
+        from .telegram_bot import run_telegram_bot
+
+        run_telegram_bot(config)
+        return 0
+    if action == "status":
+        data = telegram_status(config)
+        ready = bool(
+            data["enabled"]
+            and data["configured"]
+            and data["token_present"]
+            and data["service_active"]
+        )
+        emit(envelope("telegram status", data=data, ok=ready)) if args.json else console.print_json(
+            data=data
+        )
+        return 0 if ready else 1
+    if action in {"enable", "disable"}:
+        updated = toggle_telegram(config, action == "enable", args.config)
+        data = telegram_status(updated)
+        emit(envelope(f"telegram {action}", data=data)) if args.json else console.print_json(
+            data=data
+        )
+        return 0
+    if action == "alerts":
+        updated = toggle_alerts(config, args.mode == "on", args.config)
+        data = telegram_status(updated)
+        emit(envelope("telegram alerts", data=data)) if args.json else console.print_json(data=data)
+        return 0
+    if args.no_input or args.json:
+        if args.json:
+            emit_error(
+                "telegram setup",
+                "INPUT_REQUIRED",
+                "Telegram setup needs a bot token and private-chat pairing.",
+                "Run snuetl telegram setup interactively.",
+            )
+        return 5
+    _updated, data = configure_telegram(config, args.config)
+    console.print_json(data=data)
+    return 0
+
+
+def _refresh_gateway_directory_access(config: Config, config_path: Path) -> None:
+    from .scheduler import install_discord_service, install_telegram_service
+
+    kwargs = {
+        "state_dir": config.state_dir,
+        "download_dir": config.download_dir,
+        "write_dirs": tuple(route.destination for route in config.directory_routes),
+    }
+    if config.discord.enabled and discord_service_is_enabled():
+        install_discord_service(config_path, **kwargs)
+    if config.telegram.enabled and telegram_service_is_enabled():
+        install_telegram_service(config_path, **kwargs)
 
 
 def _directory_permission_warnings(
@@ -699,7 +869,7 @@ def _run_directory(config: Config, args: argparse.Namespace) -> int:
     data["permissions"] = [directory_permission_data(report) for report in permission_reports]
     summary = execute_directory_migration(updated, entries)
     save_config(updated, config_path)
-    _refresh_discord_directory_access(updated, config_path)
+    _refresh_gateway_directory_access(updated, config_path)
     data["migration"] = {
         "automatic": not args.no_migrate,
         **asdict(summary),
@@ -928,6 +1098,8 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         if args.command == "discord":
             return _run_discord_command(config, args)
+        if args.command == "telegram":
+            return _run_telegram_command(config, args)
         if args.command is None:
             auth_ready = (
                 config.profile_dir.exists() and config.auth_state_path.exists()
@@ -1006,6 +1178,59 @@ def main(argv: list[str] | None = None) -> int:
                     LOGGER.error("login requires terminal input")
                 return 5
             return _login(config, headless=_headless_choice(args, config), config_path=args.config)
+        if args.command == "api":
+            operation = args.api_command or "status"
+            if operation == "status":
+                data = token_status(config, verify=load_token(config) is not None)
+            else:
+                config = replace(config, canvas_api_enabled=True)
+                save_config(config, args.config)
+                token = ensure_token(
+                    config,
+                    headless=_headless_choice(args, config),
+                    rotate=operation == "rotate",
+                )
+                data = {"configured": True, "valid": True, **token.public()}
+            if args.json:
+                emit(envelope("api", data=data))
+            else:
+                console.print_json(data=data)
+            return 0
+        if args.command in {
+            "upcoming",
+            "missing",
+            "submissions",
+            "grades",
+            "calendar",
+            "discussions",
+            "activity",
+            "announcements",
+            "modules",
+            "feedback",
+            "dashboard",
+        }:
+            start = (
+                date.fromisoformat(args.start_date) if getattr(args, "start_date", None) else None
+            )
+            end = date.fromisoformat(args.end_date) if getattr(args, "end_date", None) else None
+            if start and end and end < start:
+                raise ValueError("--to must be on or after --from")
+            rows = live_data(
+                config, args.command, course=getattr(args, "course", None), start=start, end=end
+            )
+            if args.json:
+                emit(envelope(args.command, data=rows))
+            else:
+                table = Table(title=f"{args.command.capitalize()} ({len(rows)})")
+                columns = list(rows[0]) if rows else ["Result"]
+                for column in columns:
+                    table.add_column(column.replace("_", " ").title())
+                for row in rows:
+                    table.add_row(
+                        *(_live_cell(row.get(column)) for column in columns)
+                    )
+                console.print(table)
+            return 0
         if args.command == "sync":
             summary = synchronize(config, headless=_headless_choice(args, config))
             if args.json:

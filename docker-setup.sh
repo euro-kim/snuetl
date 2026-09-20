@@ -278,6 +278,21 @@ container_name="$(read_env_value SNUETL_CONTAINER_NAME)"
 if [[ -n "$PROJECT_NAME" && ! "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     die "--project-name must start with a lowercase letter or digit and contain only lowercase letters, digits, hyphens, and underscores"
 fi
+image_value=""
+if awk -F= '$1 == "SNUETL_IMAGE" {found = 1} END {exit !found}' "$ENV_FILE"; then
+    image_value="$(read_env_value SNUETL_IMAGE)"
+fi
+if [[ -z "$image_value" || "$image_value" == snuetl:local ]]; then
+    set_env_value SNUETL_IMAGE "snuetl:${PROJECT_NAME:-$container_name}"
+fi
+image_tag="$(read_env_value SNUETL_IMAGE)"
+[[ "$image_tag" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.:/-]*$ ]] || die "invalid SNUETL_IMAGE tag: ${image_tag}"
+source_revision="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+package_version="unknown"
+if [[ -f "$SCRIPT_DIR/pyproject.toml" ]]; then
+    package_version="$(awk -F'"' '/^version = "/ {print $2; exit}' "$SCRIPT_DIR/pyproject.toml")"
+fi
+package_version="${package_version:-unknown}"
 
 canonical_host_path() {
     local key="$1"
@@ -320,113 +335,32 @@ done
 ensure_host_directory() {
     local key="$1"
     local path="$2"
-    local private="$3"
-    local owner_uid owner_gid mode mode_value access_bits new_mode mismatch probe
+    local probe
 
     if [[ -e "$path" && ! -d "$path" ]]; then
         die "${key} points to a non-directory: ${path}"
     fi
     if [[ ! -d "$path" ]]; then
         log "Creating ${path}."
-        if ! mkdir -p -m 0700 -- "$path" 2>/dev/null; then
+        if ! install -d -m 0700 -- "$path" 2>/dev/null; then
             log "Elevated permission is required to create ${path}."
-            if ! run_privileged mkdir -p -m 0700 -- "$path"; then
+            if ! run_privileged install -d -o "$HOST_UID" -g "$HOST_GID" -m 0700 -- "$path"; then
                 die "could not create ${path}"
             fi
         fi
     fi
-
-    owner_uid="$(stat -c '%u' -- "$path")"
-    owner_gid="$(stat -c '%g' -- "$path")"
-    mode="$(stat -c '%a' -- "$path")"
-
-    if "$private"; then
-        mismatch=""
-        if [[ "$owner_uid" != "$HOST_UID" || "$owner_gid" != "$HOST_GID" ]]; then
-            mismatch="$path"
-        elif ! mismatch="$(
-            find "$path" -xdev \( ! -uid "$HOST_UID" -o ! -gid "$HOST_GID" \) -print -quit \
-                2>/dev/null
-        )"; then
-            mismatch="$path"
-        fi
-        if [[ -n "$mismatch" ]]; then
-            log "Private data under ${path} does not match ${HOST_UID}:${HOST_GID}; repairing ownership recursively."
-            if ! run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"; then
-                die "could not repair ownership under ${path}"
-            fi
-        fi
-
-        if [[ "$mode" != 700 ]]; then
-            log "Private directory ${path} has mode ${mode}; changing it to 700."
-            if ! chmod 0700 -- "$path" 2>/dev/null; then
-                if ! run_privileged chmod 0700 -- "$path"; then
-                    die "could not set mode 700 on ${path}; check filesystem mount options"
-                fi
-            fi
-        fi
-
-        owner_uid="$(stat -c '%u' -- "$path")"
-        owner_gid="$(stat -c '%g' -- "$path")"
-        mode="$(stat -c '%a' -- "$path")"
-        [[ "$owner_uid" == "$HOST_UID" && "$owner_gid" == "$HOST_GID" && "$mode" == 700 ]] || \
-            die "could not enforce owner ${HOST_UID}:${HOST_GID} and mode 700 on ${path}; check filesystem mount options"
-    else
-        mode_value=$((8#$mode))
-        if [[ "$owner_uid" == "$HOST_UID" ]]; then
-            access_bits=$(((mode_value >> 6) & 7))
-            new_mode=$((mode_value | 0700))
-        elif [[ "$owner_gid" == "$HOST_GID" ]]; then
-            access_bits=$(((mode_value >> 3) & 7))
-            new_mode=$((mode_value | 0070))
-        else
-            access_bits=$((mode_value & 7))
-            new_mode=$((mode_value | 0700))
-        fi
-        if ((EUID != 0)) && [[ -r "$path" && -w "$path" && -x "$path" ]]; then
-            # Preserve ACL-based access even when the traditional mode bits do not show it.
-            access_bits=7
-        fi
-
-        if ((access_bits != 7)); then
-            if [[ "$owner_uid" != "$HOST_UID" && "$owner_gid" != "$HOST_GID" ]]; then
-                log "${path} is not usable through its current owner or group; changing ownership to ${HOST_UID}:${HOST_GID}."
-                if ! run_privileged chown -R -- "${HOST_UID}:${HOST_GID}" "$path"; then
-                    die "could not repair ownership under ${path}"
-                fi
-                new_mode=$((mode_value | 0700))
-            fi
-            if ((new_mode != mode_value)); then
-                printf -v new_mode '%04o' "$new_mode"
-                log "${path} lacks required read/write/traverse access; changing mode ${mode} to ${new_mode}."
-                if ! chmod "$new_mode" -- "$path" 2>/dev/null; then
-                    if ! run_privileged chmod "$new_mode" -- "$path"; then
-                        die "could not make ${path} usable; check filesystem mount options"
-                    fi
-                fi
-            else
-                log "The ownership correction makes ${path} usable; preserving mode ${mode}."
-            fi
-        else
-            log "${path} is already usable with owner ${owner_uid}:${owner_gid} and mode ${mode}; preserving both."
-        fi
-    fi
-
     probe="${path}/.snuetl-write-check.$$"
     if ! (umask 077 && : >"$probe") 2>/dev/null; then
-        die "${path} is not writable by ${HOST_USER} even after permission repair"
+        die "${key} (${path}) is not writable by UID ${HOST_UID}; adjust access manually. Existing mount permissions were not changed"
     fi
     rm -f -- "$probe"
+    [[ -r "$path" && -x "$path" ]] || \
+        die "${key} (${path}) must be readable and traversable by UID ${HOST_UID}; adjust access manually"
+    log "Preserving existing ownership and mode for ${path}."
 }
 
 for index in "${!DIRECTORY_KEYS[@]}"; do
-    private=false
-    case "${DIRECTORY_KEYS[$index]}" in
-        SNUETL_CONFIG_DIR|SNUETL_STATE_DIR)
-            private=true
-            ;;
-    esac
-    ensure_host_directory "${DIRECTORY_KEYS[$index]}" "${HOST_PATHS[$index]}" "$private"
+    ensure_host_directory "${DIRECTORY_KEYS[$index]}" "${HOST_PATHS[$index]}"
 done
 
 compose() {
@@ -436,6 +370,7 @@ compose() {
     fi
     env \
         -u SNUETL_CONTAINER_NAME \
+        -u SNUETL_IMAGE \
         -u SNUETL_UID \
         -u SNUETL_GID \
         -u SNUETL_TIMEZONE \
@@ -443,6 +378,8 @@ compose() {
         -u SNUETL_STATE_DIR \
         -u SNUETL_DOWNLOAD_DIR \
         -u SNUETL_VIDEO_DIR \
+        SNUETL_SOURCE_REVISION="$source_revision" \
+        SNUETL_PACKAGE_VERSION="$package_version" \
         "${DOCKER_COMMAND[@]}" compose \
         --env-file "$ENV_FILE" \
         --project-directory "$SCRIPT_DIR" \
@@ -464,11 +401,8 @@ existing_container="$(
 log "Building a fresh image with the current UID/GID and latest base image."
 compose build --pull --no-cache snuetl
 
-log "Replacing the previous Compose container; persistent host data is preserved."
-compose down --remove-orphans
-
 log "Starting ${container_name} in detached mode."
-compose up -d --force-recreate --remove-orphans snuetl
+compose up -d --no-build --force-recreate --remove-orphans snuetl
 
 container_id="$(compose ps --all -q snuetl)"
 [[ -n "$container_id" ]] || die "Compose did not create the snuetl container"

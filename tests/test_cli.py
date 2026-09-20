@@ -8,6 +8,7 @@ import pytest
 from snuetl import cli
 from snuetl.cli import main
 from snuetl.config import load_config, save_config
+from snuetl.errors import DiscoveryError
 from snuetl.models import Course, ModuleItem
 from snuetl.puller import PullPlan, PullSummary
 
@@ -61,6 +62,47 @@ def test_quizzes_command_accepts_an_optional_course() -> None:
 
     assert args.command == "quizzes"
     assert args.course == "Systems"
+
+
+def test_canvas_api_and_live_commands_are_exposed() -> None:
+    parser = cli.build_parser()
+    api = parser.parse_args(["api", "setup", "--headless", "--json"])
+    assert api.command == "api"
+    assert api.api_command == "setup"
+    assert api.headless is True
+    assert api.json is True
+    upcoming = parser.parse_args(["upcoming", "--from", "2026-09-01", "--to", "2026-09-30"])
+    assert upcoming.start_date == "2026-09-01"
+    assert upcoming.end_date == "2026-09-30"
+
+
+def test_telegram_cli_exposes_guide_alerts_and_interactive_pairing(tmp_path: Path, capsys) -> None:
+    parser = cli.build_parser()
+    alerts = parser.parse_args(["telegram", "alerts", "off", "--json"])
+    assert alerts.telegram_command == "alerts" and alerts.mode == "off"
+    path = tmp_path / "config.toml"
+    assert main(["--config", str(path), "telegram", "guide", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["botfather"] == "https://t.me/BotFather"
+    assert main(["--config", str(path), "telegram", "setup", "--json"]) == 5
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "INPUT_REQUIRED"
+
+
+def test_logout_preserves_authentication_when_canvas_revocation_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = replace(load_config(tmp_path / "missing.toml"), state_dir=tmp_path / "state")
+    config.profile_dir.mkdir(parents=True)
+    config.auth_state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli, "load_token", lambda _config: object())
+
+    def fail_revocation(_config) -> None:
+        raise DiscoveryError("revocation unconfirmed")
+
+    monkeypatch.setattr(cli, "revoke_token", fail_revocation)
+    with pytest.raises(DiscoveryError, match="revocation unconfirmed"):
+        cli._logout(config, confirmed=True)
+    assert config.profile_dir.exists()
+    assert config.auth_state_path.exists()
 
 
 def test_discord_cli_exposes_daemon_and_owner_commands() -> None:
