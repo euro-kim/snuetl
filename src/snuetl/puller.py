@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from . import media as _media
+from .access import PreferredAssetContext, PreferredDownloader
 from .browser import (
     authenticated_entry_url,
     ensure_authenticated_page,
@@ -21,7 +22,7 @@ from .browser import (
 )
 from .catalog import inspect_catalog, select_courses
 from .config import Config
-from .downloader import AuthenticatedDownloader
+from .downloader import Downloader
 from .errors import OperationCancelled
 from .file_sync import sync_file
 from .lms_session import AuthenticatedLmsSession
@@ -379,8 +380,9 @@ def _pull_articles(
         return
     from markdownify import markdownify
 
-    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
-        context = session.context
+    with PreferredAssetContext(
+        config, session_factory=lambda: _authenticated_session(config)
+    ) as context, StateStore(config.database_path) as store:
         for course, item in plan.articles:
             if progress is not None:
                 progress(f"Writing {course.display_name}: {item.title}")
@@ -412,7 +414,7 @@ def _pull_articles(
 
 
 def _download_remote_artifact(
-    downloader: AuthenticatedDownloader,
+    downloader: Downloader,
     store: StateStore,
     summary: PullSummary,
     *,
@@ -468,14 +470,9 @@ def _pull_files(
         summary.skipped += len(plan.files)
         return
     sync_summary = SyncSummary(courses=len(plan.courses))
-    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
-        context, page = session.context, session.page
-        user_agent = page.evaluate("navigator.userAgent")
-        with AuthenticatedDownloader(
-            context,
-            user_agent=user_agent,
-            timeout_seconds=config.timeout_seconds,
-            retry_count=config.retry_count,
+    with StateStore(config.database_path) as store:
+        with PreferredDownloader(
+            config, session_factory=lambda: _authenticated_session(config)
         ) as downloader:
             pull_config = replace(config, download_dir=root)
             for course, remote in plan.files:
@@ -509,15 +506,10 @@ def _pull_syllabi(
     syllabus_files: dict[str, list[RemoteFile]] = {}
     for course, remote in plan.syllabus_files:
         syllabus_files.setdefault(course.remote_id, []).append(remote)
-    with _authenticated_session(config) as session, StateStore(config.database_path) as store:
-        context, page = session.context, session.page
-        user_agent = page.evaluate("navigator.userAgent")
-        with AuthenticatedDownloader(
-            context,
-            user_agent=user_agent,
-            timeout_seconds=config.timeout_seconds,
-            retry_count=config.retry_count,
-        ) as downloader:
+    with PreferredAssetContext(
+        config, session_factory=lambda: _authenticated_session(config)
+    ) as context, StateStore(config.database_path) as store:
+        with PreferredDownloader(config, asset_context=context) as downloader:
             for course in plan.courses:
                 if progress is not None:
                     progress(f"Writing syllabus for {course.display_name}")
@@ -704,54 +696,45 @@ def _pull_videos(
     if dry_run:
         summary.skipped += len(plan.video_items) + len(plan.uploaded_media)
         return
+    video_count = len(plan.video_items) + len(plan.uploaded_media)
+    if progress is not None:
+        progress(f"Preparing {video_count} selected video{'s' if video_count != 1 else ''}...")
+
+    if plan.uploaded_media:
+        with StateStore(config.database_path) as store, PreferredDownloader(
+            config, session_factory=lambda: _authenticated_session(config)
+        ) as downloader:
+            for course, remote in plan.uploaded_media:
+                base = routed_category_dir(config, course, "videos", default_root=root)
+                try:
+                    if progress is not None:
+                        progress(f"Downloading {course.display_name}: {remote.name}")
+                    with store.transaction():
+                        _download_remote_artifact(
+                            downloader, store, summary,
+                            artifact_type="video_file", course=course, remote=remote,
+                            destination=base / sanitize_component(remote.name),
+                        )
+                except OperationCancelled:
+                    raise
+                except Exception as exc:
+                    summary.failed += 1
+                    summary.warnings.append(
+                        {"code": "VIDEO_FILE_FAILED", "message": str(redact(exc)),
+                         "course_id": course.remote_id, "video_id": remote.remote_id}
+                    )
+    if not plan.video_items:
+        return
     try:
         import yt_dlp
     except ImportError as exc:  # pragma: no cover - installation problem
         raise RuntimeError("yt-dlp is not installed; reinstall snuetl with dependencies") from exc
-
-    video_count = len(plan.video_items) + len(plan.uploaded_media)
-    if progress is not None:
-        progress(f"Preparing {video_count} selected video{'s' if video_count != 1 else ''}...")
 
     with _authenticated_session(config) as session, StateStore(config.database_path) as store:
         context, page = session.context, session.page
         _clear_stale_learningx_cookies(context)
         cookie_file: Path | None = None
         try:
-            user_agent = page.evaluate("navigator.userAgent")
-            with AuthenticatedDownloader(
-                context,
-                user_agent=user_agent,
-                timeout_seconds=config.timeout_seconds,
-                retry_count=config.retry_count,
-            ) as downloader:
-                for course, remote in plan.uploaded_media:
-                    base = routed_category_dir(config, course, "videos", default_root=root)
-                    try:
-                        if progress is not None:
-                            progress(f"Downloading {course.display_name}: {remote.name}")
-                        with store.transaction():
-                            _download_remote_artifact(
-                                downloader,
-                                store,
-                                summary,
-                                artifact_type="video_file",
-                                course=course,
-                                remote=remote,
-                                destination=base / sanitize_component(remote.name),
-                            )
-                    except OperationCancelled:
-                        raise
-                    except Exception as exc:
-                        summary.failed += 1
-                        summary.warnings.append(
-                            {
-                                "code": "VIDEO_FILE_FAILED",
-                                "message": str(redact(exc)),
-                                "course_id": course.remote_id,
-                                "video_id": remote.remote_id,
-                            }
-                        )
             for course, item in plan.video_items:
                 if item.locked:
                     summary.skipped += 1

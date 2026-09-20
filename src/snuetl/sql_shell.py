@@ -67,7 +67,7 @@ def _help() -> None:
   [cyan].columns TABLE[/cyan]        show a table's canonical fields
   [cyan].limit [N][/cyan]            show or set output limit; 0 means all
   [cyan].mode FORMAT[/cyan]          table, json, jsonl, or csv
-  [cyan].refresh[/cyan]              fetch all remote metadata (no downloads)
+  [cyan].refresh[/cyan]              refresh catalog and saved personal scopes (no downloads)
   [cyan].status[/cyan]               show catalog refresh timestamps
   [cyan].quit[/cyan] / [cyan].exit[/cyan]        leave the shell
 
@@ -95,7 +95,7 @@ def run_sql_shell(
 ) -> int:
     _install_completion()
     console.print(
-        "[bold blue]snuetl SQL[/bold blue] — read-only local eTL catalog\n"
+        "[bold blue]snuetl SQL[/bold blue] — read-only, refreshed eTL catalog\n"
         "Enter SQL ending with [cyan];[/cyan], or [cyan].help[/cyan] for commands."
     )
     buffer: list[str] = []
@@ -152,6 +152,7 @@ def run_sql_shell(
                     except Exception as exc:
                         console.print(f"[red]Refresh failed: {exc}[/red]")
             elif command == ".status":
+                console.print("[bold]Catalog[/bold]")
                 result = execute_query(
                     database_path,
                     "SELECT scope, refreshed_at, row_count, complete FROM catalog_status "
@@ -159,6 +160,14 @@ def run_sql_shell(
                     limit=limit,
                 )
                 print_query_result(result, output_format, limit_hint=".limit 0")
+                console.print("[bold]Saved personal scopes[/bold]")
+                snapshots = execute_query(
+                    database_path,
+                    "SELECT command, scope, fetched_at, row_count "
+                    "FROM canvas_snapshot_status ORDER BY command, scope",
+                    limit=limit,
+                )
+                print_query_result(snapshots, output_format, limit_hint=".limit 0")
             else:
                 console.print(f"[red]Unknown shell command: {command}[/red]")
             continue

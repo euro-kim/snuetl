@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from .config import Config
-from .downloader import AuthenticatedDownloader
+from .downloader import Downloader
 from .errors import AuthenticationRequired
 from .logging_utils import redact
 from .models import Course, RemoteFile, SyncSummary
@@ -53,7 +53,7 @@ class FileSyncService:
         self,
         config: Config,
         store: StateStore,
-        downloader: AuthenticatedDownloader,
+        downloader: Downloader,
     ) -> None:
         self.config = config
         self.store = store
@@ -142,7 +142,7 @@ class FileSyncService:
 def sync_file(
     config: Config,
     store: StateStore,
-    downloader: AuthenticatedDownloader,
+    downloader: Downloader,
     course: Course,
     remote: RemoteFile,
     summary: SyncSummary,

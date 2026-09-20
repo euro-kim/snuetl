@@ -4,7 +4,7 @@ import hashlib
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -15,6 +15,10 @@ from .models import DownloadResult, RemoteFile
 
 class DownloadError(RuntimeError):
     pass
+
+
+class Downloader(Protocol):
+    def download(self, remote: RemoteFile, destination: Path) -> DownloadResult: ...
 
 
 class AuthenticatedDownloader:
@@ -96,3 +100,38 @@ class AuthenticatedDownloader:
                 if attempt < self.retry_count:
                     time.sleep(min(2**attempt, 15))
         raise DownloadError(str(last_error) if last_error else "download failed")
+
+
+class TokenDownloader(AuthenticatedDownloader):
+    """Download Canvas files with a token only on the Canvas origin."""
+
+    def __init__(self, origin: str, token: str, *, timeout_seconds: float, retry_count: int):
+        self.origin = urlsplit(origin).netloc.lower()
+        self.retry_count = retry_count
+        options = {"timeout": httpx.Timeout(timeout_seconds), "follow_redirects": True}
+
+        def restrict_authorization(request: httpx.Request) -> None:
+            parts = urlsplit(str(request.url))
+            if parts.scheme != "https" or parts.netloc.lower() != self.origin:
+                request.headers.pop("Authorization", None)
+
+        self.authorized = httpx.Client(
+            headers={"Authorization": f"Bearer {token}"},
+            event_hooks={"request": [restrict_authorization]},
+            **options,
+        )
+        self.public = httpx.Client(**options)
+        self.client = self.authorized
+
+    def __exit__(self, *_: object) -> None:
+        self.authorized.close()
+        self.public.close()
+
+    def download(self, remote: RemoteFile, destination: Path) -> DownloadResult:
+        parts = urlsplit(remote.download_url)
+        self.client = (
+            self.authorized
+            if parts.scheme == "https" and parts.netloc.lower() == self.origin
+            else self.public
+        )
+        return super().download(remote, destination)

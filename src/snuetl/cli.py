@@ -19,7 +19,7 @@ from . import __version__
 from .agent import emit, emit_error, envelope
 from .browser_profiles import select_profile, switch_profile
 from .canvas_api import ensure_token, live_data, load_token, revoke_token, token_status
-from .catalog import inspect_catalog, refresh_catalog
+from .catalog import CatalogRefreshSummary, inspect_catalog, refresh_catalog
 from .cli_parser import CliUsageError, build_parser
 from .cli_runtime import handle_cli_exception
 from .config import Config, DirectoryRoute, default_config_path, load_config, save_config
@@ -42,7 +42,8 @@ from .directory_manager import (
     validate_managed_root,
 )
 from .errors import AuthenticationRequired, DiscoveryError
-from .logging_utils import configure_logging
+from .logging_utils import configure_logging, redact
+from .live_snapshot import refresh_saved_snapshots, save_live_snapshot
 from .onboarding import (
     browser_available,
     display_available,
@@ -371,6 +372,7 @@ def _capabilities() -> dict[str, object]:
             "sql": {
                 "interactive": "snuetl sql",
                 "noninteractive": ["--execute", "--file", "stdin"],
+                "refresh": "automatic; --no-refresh uses the local cache",
             },
             "pull": ["files", "articles", "syllabus", "videos", "all"],
             "discord": [
@@ -417,7 +419,10 @@ def _capabilities() -> dict[str, object]:
                 "telegram",
             ],
         },
-        "agent_flags": ["--json", "--no-input", "--yes", "--dry-run", "--video-id"],
+        "agent_flags": [
+            "--json", "--no-input", "--yes", "--dry-run", "--video-id", "--save",
+            "--no-refresh",
+        ],
         "exit_codes": {
             "0": "success",
             "1": "command failure",
@@ -894,6 +899,45 @@ def _read_sql(args: argparse.Namespace) -> str | None:
     return None
 
 
+def _refresh_sql_content(
+    config: Config, *, headless: bool, required: bool
+) -> tuple[CatalogRefreshSummary | None, int, list[dict[str, str]]]:
+    """Refresh catalog and opted-in personal scopes before opening SQL."""
+    warnings: list[dict[str, str]] = []
+    summary: CatalogRefreshSummary | None = None
+    try:
+        summary = refresh_catalog(config, headless=headless)
+        LOGGER.info(
+            "catalog refreshed courses=%d files=%d articles=%d assignments=%d quizzes=%d",
+            summary.courses,
+            summary.files,
+            summary.articles,
+            summary.assignments,
+            summary.quizzes,
+        )
+    except Exception as exc:
+        if required:
+            raise
+        warnings.append(
+            {"code": "CATALOG_REFRESH_FAILED", "message": str(redact(exc))}
+        )
+    try:
+        updated, snapshot_warnings = refresh_saved_snapshots(config)
+    except Exception as exc:
+        if required:
+            raise
+        updated = 0
+        snapshot_warnings = [
+            {"code": "SNAPSHOT_REFRESH_FAILED", "message": str(redact(exc))}
+        ]
+    warnings.extend(snapshot_warnings)
+    if required and snapshot_warnings:
+        raise DiscoveryError(
+            f"{len(snapshot_warnings)} saved Canvas snapshot scope(s) could not be refreshed"
+        )
+    return summary, updated, warnings
+
+
 def _video_choices(plan: object) -> list[tuple[str, str]]:
     choices = [
         (item.remote_id, f"{course.display_name}: {item.title}")
@@ -1218,8 +1262,16 @@ def main(argv: list[str] | None = None) -> int:
             rows = live_data(
                 config, args.command, course=getattr(args, "course", None), start=start, end=end
             )
+            saved_path = None
+            if args.save:
+                saved_path = save_live_snapshot(
+                    config, args.command, rows,
+                    course=getattr(args, "course", None),
+                    start=args.start_date if getattr(args, "start_date", None) else None,
+                    end=args.end_date if getattr(args, "end_date", None) else None,
+                )
             if args.json:
-                emit(envelope(args.command, data=rows))
+                emit(envelope(args.command, data=rows, meta={"saved_path": str(saved_path)} if saved_path else None))
             else:
                 table = Table(title=f"{args.command.capitalize()} ({len(rows)})")
                 columns = list(rows[0]) if rows else ["Result"]
@@ -1230,6 +1282,8 @@ def main(argv: list[str] | None = None) -> int:
                         *(_live_cell(row.get(column)) for column in columns)
                     )
                 console.print(table)
+                if saved_path is not None:
+                    console.print(f"Saved Markdown: {saved_path}\nSaved SQL rows: canvas_snapshots")
             return 0
         if args.command == "sync":
             summary = synchronize(config, headless=_headless_choice(args, config))
@@ -1279,24 +1333,39 @@ def main(argv: list[str] | None = None) -> int:
             console.print(table)
             return 0
         if args.command in {"query", "sql"}:
-            if args.refresh:
-                summary = refresh_catalog(config, headless=_headless_choice(args, config))
-                LOGGER.info(
-                    "catalog refreshed courses=%d files=%d articles=%d assignments=%d quizzes=%d",
-                    summary.courses,
-                    summary.files,
-                    summary.articles,
-                    summary.assignments,
-                    summary.quizzes,
+            refresh_warnings: list[dict[str, str]] = []
+            if not args.no_refresh:
+                if not args.json:
+                    console.print("[dim]Refreshing Canvas data for SQL…[/dim]")
+                _, saved_count, refresh_warnings = _refresh_sql_content(
+                    config,
+                    headless=_headless_choice(args, config),
+                    required=args.refresh,
                 )
+                if not args.json:
+                    if saved_count:
+                        console.print(f"[dim]Refreshed {saved_count} saved personal view(s).[/dim]")
+                    for warning in refresh_warnings:
+                        console.print(f"[yellow]Using cached data: {warning['message']}[/yellow]")
             sql = _read_sql(args)
             if sql is None:
                 if sys.stdin.isatty() and not args.json:
+                    def refresh_from_shell() -> CatalogRefreshSummary:
+                        summary, saved_count, _ = _refresh_sql_content(
+                            config,
+                            headless=_headless_choice(args, config),
+                            required=True,
+                        )
+                        if saved_count:
+                            console.print(
+                                f"[dim]Refreshed {saved_count} saved personal view(s).[/dim]"
+                            )
+                        assert summary is not None
+                        return summary
+
                     return run_sql_shell(
                         config.database_path,
-                        refresh=lambda: refresh_catalog(
-                            config, headless=_headless_choice(args, config)
-                        ),
+                        refresh=refresh_from_shell,
                         output_format=args.format,
                         limit=args.limit,
                     )
@@ -1312,7 +1381,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             result = execute_query(config.database_path, sql, limit=args.limit)
             if args.json:
-                emit(envelope(args.command, data=_query_data(result)))
+                emit(envelope(args.command, data=_query_data(result), warnings=refresh_warnings))
             else:
                 print_query_result(result, args.format)
             return 0

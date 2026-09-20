@@ -105,10 +105,16 @@ def build_parser() -> argparse.ArgumentParser:
         source = query.add_mutually_exclusive_group()
         source.add_argument("--execute", "-e", help="execute one SQL statement")
         source.add_argument("--file", type=Path, help="execute SQL read from a file")
-        query.add_argument(
+        refresh_mode = query.add_mutually_exclusive_group()
+        refresh_mode.add_argument(
             "--refresh",
             action="store_true",
-            help="refresh every remote catalog table before querying",
+            help="require a successful remote refresh before querying (also the default attempt)",
+        )
+        refresh_mode.add_argument(
+            "--no-refresh",
+            action="store_true",
+            help="query local cached data without contacting Canvas",
         )
         query.add_argument(
             "--format",
@@ -239,6 +245,10 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--to", dest="end_date", help="end date (YYYY-MM-DD)")
         if name == "feedback":
             command.add_argument("--since", dest="start_date", help="graded since (YYYY-MM-DD)")
+        command.add_argument(
+            "--save", action="store_true",
+            help="save a private Markdown snapshot and queryable SQLite rows",
+        )
         add_agent_flags(command)
 
     logout = subparsers.add_parser(

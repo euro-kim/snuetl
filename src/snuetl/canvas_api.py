@@ -1,4 +1,4 @@
-"""Personal Canvas token provisioning and live, read-only API commands."""
+"""Personal Canvas token provisioning, catalog access, and live API commands."""
 
 from __future__ import annotations
 
@@ -363,14 +363,11 @@ def revoke_token(config: Config, token: CanvasToken | None = None) -> None:
     path = (
         f"/api/v1/users/{quote(current.user_id, safe='')}/tokens/{quote(current.token_id, safe='')}"
     )
-    if urlsplit(current.origin).hostname == "myetl.snu.ac.kr":
+    try:
+        with CanvasClient(config, current) as client:
+            client.request("DELETE", path)
+    except (AuthenticationRequired, DiscoveryError):
         _revoke_via_ui(config, current)
-    else:
-        try:
-            with CanvasClient(config, current) as client:
-                client.request("DELETE", path)
-        except (AuthenticationRequired, DiscoveryError):
-            _revoke_via_ui(config, current)
     saved = load_token(config)
     if saved is not None and saved.token_id == current.token_id:
         config.canvas_token_path.unlink(missing_ok=True)

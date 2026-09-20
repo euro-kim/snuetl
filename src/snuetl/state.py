@@ -163,6 +163,27 @@ class StateStore:
                 row_count INTEGER NOT NULL,
                 complete INTEGER NOT NULL DEFAULT 1
             );
+            CREATE TABLE IF NOT EXISTS canvas_snapshots (
+                command TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                row_number INTEGER NOT NULL,
+                course_id TEXT,
+                item_id TEXT,
+                title TEXT,
+                due_at TEXT,
+                data_json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (command, scope, row_number)
+            );
+            CREATE INDEX IF NOT EXISTS canvas_snapshots_command_idx
+                ON canvas_snapshots(command, course_id);
+            CREATE TABLE IF NOT EXISTS canvas_snapshot_scopes (
+                command TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                PRIMARY KEY (command, scope)
+            );
             CREATE TABLE IF NOT EXISTS runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at TEXT NOT NULL,

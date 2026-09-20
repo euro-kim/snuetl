@@ -103,6 +103,16 @@ SCHEMA = (
         "run_id, started_at, finished_at, status, downloaded, updated, unchanged, failed",
         "file synchronization history",
     ),
+    SchemaTable(
+        "canvas_snapshots",
+        "command, scope, row_number, course_id, item_id, title, due_at, data_json, fetched_at",
+        "personal Canvas views saved explicitly with --save; data_json contains full row fields",
+    ),
+    SchemaTable(
+        "canvas_snapshot_status",
+        "command, scope, fetched_at, row_count",
+        "freshness of saved personal Canvas scopes, including empty results",
+    ),
 )
 
 
@@ -325,6 +335,23 @@ CREATE TEMP VIEW sync_runs AS
 SELECT id AS run_id, started_at, finished_at, status,
        downloaded, updated, unchanged, failed
 FROM main.runs;
+
+CREATE TEMP VIEW canvas_snapshots AS
+SELECT command, scope, row_number, course_id, item_id, title, due_at,
+       data_json, fetched_at
+FROM main.canvas_snapshots;
+
+CREATE TEMP VIEW canvas_snapshot_status AS
+SELECT command, scope, fetched_at, row_count
+FROM main.canvas_snapshot_scopes
+UNION ALL
+SELECT s.command, s.scope, MAX(s.fetched_at), COUNT(*)
+FROM main.canvas_snapshots AS s
+WHERE NOT EXISTS (
+    SELECT 1 FROM main.canvas_snapshot_scopes AS known
+    WHERE known.command = s.command AND known.scope = s.scope
+)
+GROUP BY s.command, s.scope;
 """
 
 

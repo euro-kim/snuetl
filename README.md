@@ -492,9 +492,10 @@ snuetl modules [COURSE]         show module items, progress, and locks
 snuetl feedback [COURSE]        show recent grades, comments, and rubrics
 snuetl dashboard [COURSE]       summarize near-term work and course grades
 snuetl refresh                  cache every paginated catalog table
-snuetl sql                      open the interactive read-only SQL shell
+snuetl sql                      refresh data and open the read-only SQL shell
 snuetl query                    compatibility alias for the SQL shell
-snuetl sql --execute SQL        run one SQL query over cached metadata
+snuetl sql --execute SQL        refresh and run one SQL query
+snuetl sql --no-refresh         use cached SQL data without network access
 snuetl schema                   show canonical tables and field names
 snuetl pull [KIND]              pull files, articles, syllabi, videos, or all
 snuetl sync                     compatibility alias for pulling files
@@ -523,8 +524,12 @@ override.
 Guided setup offers Canvas API access by default. The token is created through the
 authenticated Account Settings page, expires after one year, and is saved at
 `~/.local/state/snuetl/canvas-token.json` with mode `0600`. If you decline, run
-`snuetl api setup` later. The new personal-data commands fetch live results and do not
-add grades or submissions to the SQLite catalog. Use `--from YYYY-MM-DD` and
+`snuetl api setup` later. Personal-data commands fetch live results. They remain in
+memory unless you pass `--save`, which writes an owner-only Markdown snapshot under
+`<download-root>/canvas/` and rows to the local `canvas_snapshots` SQL view. This can
+include grades, submissions, and instructor feedback, so protect that directory and
+database as private data. `--save` refuses an existing `canvas/` directory that is
+accessible to other users; it does not change its permissions. Use `--from YYYY-MM-DD` and
 `--to YYYY-MM-DD` with `upcoming`, `calendar`, `activity`, `announcements`, or `dashboard` to change
 the date range. `feedback --since YYYY-MM-DD` selects recently graded submissions.
 Use `--json` for the full structured comments and rubric details. New API views honor
@@ -538,7 +543,31 @@ snuetl dashboard --json
 snuetl announcements Biology --from 2026-09-01
 snuetl modules Biology --json
 snuetl feedback Biology --since 2026-09-01 --json
+snuetl grades --save
+snuetl sql --execute "SELECT course_id, data_json FROM canvas_snapshots WHERE command = 'grades'"
 ```
+
+### Personal token and browser-cookie access
+
+| Feature or command | Personal Canvas token | Browser cookies | Relationship and local output |
+| --- | --- | --- | --- |
+| `setup`, `login`, `api setup`, `api rotate` | Created or replaced through Account Settings | Required for interactive SNU login and token creation | Browser workflow establishes access. |
+| `api status` | Validates a saved token with the Canvas profile API | None | Reports token health without printing the secret. |
+| `courses`, `files`, `articles`, `assignments`, `quizzes` | Tried first for the complete Canvas catalog | Canvas API with cookies, then page discovery when token access fails | Successful results update the SQLite catalog. |
+| `refresh`, `sql`, `query` | Tried first for all catalog metadata | Canvas API with cookies, then page discovery if token refresh fails | Entering SQL refreshes the catalog automatically unless `--no-refresh` is set. |
+| `sync`, `pull files` | Tried first for catalog metadata and each file download | Used for discovery or individual downloads when token access fails | Downloaded files and tracking rows are local. |
+| `pull articles` | Tried first for article bodies and linked public assets | Used if article discovery or an asset request needs browser cookies | Writes local Markdown and localized assets. |
+| `pull syllabus` | Tried first for course metadata and uploaded syllabus files | Used for embedded syllabus content and PDF rendering; also backs up file downloads | Writes Markdown, PDF when rendering succeeds, uploaded files, and a manifest. |
+| `pull videos` | Tried first for module metadata and uploaded media files | Used to resolve LearningX, LTI, and LCMS player media | Video streaming still needs the browser provider flow; saves media and captions. |
+| `upcoming`, `missing`, `submissions`, `grades`, `calendar`, `discussions`, `activity`, `announcements`, `modules`, `feedback`, `dashboard` | Required for live personal Canvas data | No browser-cookie fallback | `--save` writes Markdown and queryable `canvas_snapshots` rows; otherwise results are not stored. |
+| `sql`, `query` saved personal scopes | Refreshes scopes previously saved with `--save` | No browser-cookie fallback for personal scopes | SQL rows update on entry; Markdown snapshots update only when `--save` is run again. `--no-refresh` uses cached rows. |
+| Discord catalog, refresh, sync, and pull | Uses the corresponding terminal command's token-first path | Same fallback as the corresponding terminal command | Remote jobs use the server's own token and browser profile. |
+| Telegram live views and digest; Telegram sync | Live views require the token; sync prefers it | Live views have no cookie fallback; sync uses browser cookies when needed | Telegram does not persist personal snapshots unless a local `--save` command is run. |
+| `logout` | Tries Canvas API token revocation first | Uses Account Settings if API revocation fails | Removes local authentication after remote revocation. |
+
+The token is sent only to the configured Canvas origin. A file or asset URL on another
+host is fetched without that Authorization header. Browser login still handles SNU MFA
+when a cookie fallback needs a new session.
 
 ## Discord remote control
 
@@ -722,7 +751,9 @@ run setup as `docker compose exec snuetl snuetl telegram setup`.
 
 ## SQL catalog
 
-Refresh every metadata table without downloading files:
+Opening `snuetl sql` or `snuetl query` refreshes the catalog before querying. It also
+refreshes personal Canvas scopes previously saved with `--save`. This downloads no files.
+To refresh without entering SQL, run:
 
 ```bash
 snuetl refresh
@@ -751,8 +782,12 @@ snuetl sql --execute \
     ORDER BY published_at DESC"
 ```
 
-Use `snuetl sql --refresh --execute "SELECT ..."` to refresh all remote metadata immediately
-before a query. Query output defaults to a terminal table and 200 rows. Use `--limit 0`
+Automatic refresh is best effort: if Canvas is unavailable, SQL uses the existing cache
+and shows a warning. Use `--refresh` to require a successful refresh, or `--no-refresh`
+to query the cache without network access. Previously saved personal SQL scopes are
+refreshed on entry; their Markdown files change only when you rerun the personal command
+with `--save`. Query `canvas_snapshot_status` to see each saved scope's last refresh time,
+including scopes that currently return no rows. Query output defaults to a terminal table and 200 rows. Use `--limit 0`
 for every result row, or `--format json`, `jsonl`, or `csv` for scripts. SQL can also
 be read from standard input, or from a file with `--file`.
 
@@ -781,7 +816,8 @@ to leave query mode immediately.
 
 The canonical read-only tables are `semesters`, `courses`, `files`, `articles`,
 `announcements`, `pages`, `assignments`, `quizzes`, `modules`, `module_items`, `videos`,
-`syllabi`, `artifacts`, `catalog_status`, and `sync_runs`. Run
+`syllabi`, `artifacts`, `catalog_status`, `sync_runs`, `canvas_snapshots`, and
+`canvas_snapshot_status`. Run
 `snuetl schema` for their canonical field names. For example, use `course_id` rather
 than the ambiguous `class_id`, `file_id` for the remote file identifier, and
 `size_bytes` for exact size.
@@ -800,7 +836,8 @@ SNU's API pagination is consumed completely by following every `rel="next"` link
 catalog scope is committed only after its pages have been fetched, and freshness can
 be inspected with `SELECT * FROM catalog_status`. Running `courses`, `files`,
 `articles`, `assignments`, or `quizzes` also refreshes the corresponding cached metadata; the
-dedicated `refresh` command updates all of them in one authenticated browser session.
+dedicated `refresh` command updates all of them in one token session when possible,
+with browser discovery as a fallback.
 
 `snuetl update` remembers how pipx installed the package. A PyPI installation is
 upgraded from PyPI, a VCS installation is fetched again, and a local-path installation
@@ -826,7 +863,8 @@ generated files are preserved; a changed remote copy is written beside them unle
 `--force` is supplied. Syllabus pulls preserve the official HTML-derived Markdown,
 a rendered PDF when possible, matching uploaded PDFs, and a source manifest.
 
-Video pulling uses authenticated browser discovery and yt-dlp, defaults to 1080p and
+Video pulling uses token-first module discovery followed by authenticated browser media
+resolution and yt-dlp, defaults to 1080p and
 downloads available captions. For SNU LCMS lectures it reads the actual player media URL,
 rejects UniPlayer's short preloader clip, sends the LCMS referrer required by the CDN, and
 can resolve LearningX attendance items through their freshly minted LTI token. Interactive
@@ -951,9 +989,10 @@ Files tracked before 0.7 stay in their original locations until the next automat
 `snuetl directory` migration. Logs deliberately omit query strings and redact common
 secret fields.
 
-The synchronizer first tries the authenticated Canvas-compatible API used by LearningX.
-If it is not exposed by the deployment, it falls back to semantic DOM selectors. It
-never uses fixed screen coordinates.
+The synchronizer first tries the personal Canvas token. If it is unavailable or rejected,
+it uses the authenticated Canvas-compatible API with browser cookies, then semantic DOM
+selectors. File downloads also try the token before cookie-backed requests. It never
+uses fixed screen coordinates.
 
 ## Production deployment
 

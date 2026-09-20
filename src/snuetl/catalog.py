@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .canvas_api import CanvasClient, token_status
 from .config import Config
-from .errors import DiscoveryError
+from .discovery import DiscoveryBackend
+from .errors import AuthenticationRequired, DiscoveryError
 from .lms_session import AuthenticatedLmsSession
 from .models import ContentItem, Course, ModuleItem, RemoteFile
 from .state import StateStore
+from .token_discovery import TokenDiscoveryAdapter
+
+LOGGER = logging.getLogger(__name__)
+
+
+class CourseSelectionError(DiscoveryError):
+    """The user's course selector cannot match this catalog."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +100,10 @@ def select_courses(courses: list[Course], query: str | None) -> list[Course]:
         return exact
     matches = [course for course in courses if folded in course.name.casefold()]
     if not matches:
-        raise DiscoveryError(f"no active course matches {query!r}")
+        raise CourseSelectionError(f"no active course matches {query!r}")
     if len(matches) > 1:
         names = ", ".join(f"{course.name} ({course.remote_id})" for course in matches)
-        raise DiscoveryError(f"course name is ambiguous; use an ID: {names}")
+        raise CourseSelectionError(f"course name is ambiguous; use an ID: {names}")
     return matches
 
 
@@ -104,65 +114,83 @@ def inspect_catalog(
     course_query: str | None = None,
     headless: bool | None = None,
 ) -> CatalogResult:
+    if token_status(config).get("ready"):
+        try:
+            with CanvasClient(config) as client:
+                adapter = TokenDiscoveryAdapter(client)
+                if not adapter.probe():
+                    raise AuthenticationRequired("Canvas token belongs to a different account")
+                return _inspect_with_discovery(
+                    config, adapter, kind, course_query
+                )
+        except CourseSelectionError:
+            raise
+        except (AuthenticationRequired, DiscoveryError) as exc:
+            LOGGER.warning("Canvas token catalog unavailable; trying browser session: %s", exc)
     with AuthenticatedLmsSession(config, headless=headless) as session:
         assert session.discovery is not None
-        discovery = session.discovery
-        courses = [
-            course
-            for course in discovery.discover_courses()
-            if course.remote_id not in config.excluded_course_ids
-        ]
+        result = _inspect_with_discovery(config, session.discovery, kind, course_query)
         session.persist(session.page.url)
-        selected = select_courses(courses, course_query)
-        if kind == "courses":
-            result = CatalogResult(tuple(selected))
-            # Course discovery itself is always global, even when future display
-            # filtering is added, so persist the complete active-course snapshot.
-            _persist_result(config, CatalogResult(tuple(courses)), kind)
-            return result
-        if kind == "files":
-            files = tuple(
+        return result
+
+
+def _inspect_with_discovery(
+    config: Config, discovery: DiscoveryBackend, kind: str, course_query: str | None
+) -> CatalogResult:
+    courses = [
+        course
+        for course in discovery.discover_courses()
+        if course.remote_id not in config.excluded_course_ids
+    ]
+    selected = select_courses(courses, course_query)
+    if kind == "courses":
+        result = CatalogResult(tuple(selected))
+        _persist_result(config, CatalogResult(tuple(courses)), kind)
+        return result
+    if kind == "files":
+        result = CatalogResult(
+            tuple(selected),
+            files=tuple(
                 (course, remote)
                 for course in selected
                 for remote in discovery.discover_files(course)
-            )
-            result = CatalogResult(tuple(selected), files=files)
-            _persist_result(config, result, kind, all_courses=tuple(courses))
-            return result
-        if kind == "articles":
-            items = tuple(
+            ),
+        )
+    elif kind == "articles":
+        result = CatalogResult(
+            tuple(selected),
+            items=tuple(
                 (course, item)
                 for course in selected
                 for item in discovery.discover_articles(course)
-            )
-            result = CatalogResult(tuple(selected), items=items)
-            _persist_result(config, result, kind, all_courses=tuple(courses))
-            return result
-        if kind in {"assignments", "quizzes"}:
-            coursework = tuple(
+            ),
+        )
+    elif kind in {"assignments", "quizzes"}:
+        coursework = tuple(
+            (course, item)
+            for course in selected
+            for item in discovery.discover_assignments(course)
+        )
+        result = CatalogResult(tuple(selected), items=coursework)
+    elif kind == "videos":
+        result = CatalogResult(
+            tuple(selected),
+            modules=tuple(
                 (course, item)
                 for course in selected
-                for item in discovery.discover_assignments(course)
-            )
-            _persist_result(
-                config,
-                CatalogResult(tuple(selected), items=coursework),
-                kind,
-                all_courses=tuple(courses),
-            )
-            wanted = "quiz" if kind == "quizzes" else "assignment"
-            return CatalogResult(
-                tuple(selected),
-                items=tuple(pair for pair in coursework if pair[1].kind == wanted),
-            )
-        if kind == "videos":
-            modules = tuple(
-                (course, item) for course in selected for item in discovery.discover_modules(course)
-            )
-            result = CatalogResult(tuple(selected), modules=modules)
-            _persist_result(config, result, kind, all_courses=tuple(courses))
-            return result
+                for item in discovery.discover_modules(course)
+            ),
+        )
+    else:
         raise ValueError(f"unsupported catalog kind {kind!r}")
+    _persist_result(config, result, kind, all_courses=tuple(courses))
+    if kind in {"assignments", "quizzes"}:
+        wanted = "quiz" if kind == "quizzes" else "assignment"
+        return CatalogResult(
+            tuple(selected),
+            items=tuple(pair for pair in result.items if pair[1].kind == wanted),
+        )
+    return result
 
 
 def refresh_catalog(
@@ -172,26 +200,41 @@ def refresh_catalog(
     progress: Callable[[str], None] | None = None,
 ) -> CatalogRefreshSummary:
     """Fetch and atomically cache every canonical catalog entity."""
+    if token_status(config).get("ready"):
+        try:
+            with CanvasClient(config) as client:
+                adapter = TokenDiscoveryAdapter(client)
+                if not adapter.probe():
+                    raise AuthenticationRequired("Canvas token belongs to a different account")
+                return _refresh_with_discovery(config, adapter, progress)
+        except (AuthenticationRequired, DiscoveryError) as exc:
+            LOGGER.warning("Canvas token refresh unavailable; trying browser session: %s", exc)
     with AuthenticatedLmsSession(config, headless=headless) as session:
         assert session.discovery is not None
-        discovery = session.discovery
-        courses = tuple(
-            course
-            for course in discovery.discover_courses()
-            if course.remote_id not in config.excluded_course_ids
-        )
-        files_by_course: dict[str, list[RemoteFile]] = {}
-        articles_by_course: dict[str, list[ContentItem]] = {}
-        assignments_by_course: dict[str, list[ContentItem]] = {}
-        modules_by_course: dict[str, list[ModuleItem]] = {}
-        for course in courses:
-            if progress is not None:
-                progress(f"Refreshing {course.display_name}")
-            files_by_course[course.remote_id] = discovery.discover_files(course)
-            articles_by_course[course.remote_id] = discovery.discover_articles(course)
-            assignments_by_course[course.remote_id] = discovery.discover_assignments(course)
-            modules_by_course[course.remote_id] = discovery.discover_modules(course)
+        summary = _refresh_with_discovery(config, session.discovery, progress)
         session.persist(session.page.url)
+        return summary
+
+
+def _refresh_with_discovery(
+    config: Config, discovery: DiscoveryBackend, progress: Callable[[str], None] | None
+) -> CatalogRefreshSummary:
+    courses = tuple(
+        course
+        for course in discovery.discover_courses()
+        if course.remote_id not in config.excluded_course_ids
+    )
+    files_by_course: dict[str, list[RemoteFile]] = {}
+    articles_by_course: dict[str, list[ContentItem]] = {}
+    assignments_by_course: dict[str, list[ContentItem]] = {}
+    modules_by_course: dict[str, list[ModuleItem]] = {}
+    for course in courses:
+        if progress is not None:
+            progress(f"Refreshing {course.display_name}")
+        files_by_course[course.remote_id] = discovery.discover_files(course)
+        articles_by_course[course.remote_id] = discovery.discover_articles(course)
+        assignments_by_course[course.remote_id] = discovery.discover_assignments(course)
+        modules_by_course[course.remote_id] = discovery.discover_modules(course)
 
     with StateStore(config.database_path) as store, store.transaction():
         _persist_courses(store, courses)

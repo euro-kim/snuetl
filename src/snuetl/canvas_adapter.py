@@ -217,6 +217,8 @@ class CanvasApiAdapter:
                 # optional endpoint is an empty source, not an operational error.
                 continue
             except DiscoveryError as exc:
+                if getattr(self, "strict_details", False):
+                    raise
                 LOGGER.warning("could not list %ss for course=%s error=%s", kind, course.name, exc)
                 continue
             successful_sources += 1
@@ -237,6 +239,8 @@ class CanvasApiAdapter:
                             f"/api/v1/courses/{course_id}/pages/{quote(str(item['url']), safe='')}"
                         )
                     except (DiscoveryError, AdapterUnavailable) as exc:
+                        if getattr(self, "strict_details", False):
+                            raise
                         LOGGER.warning(
                             "could not fetch page body course=%s page=%s error=%s",
                             course.name,
