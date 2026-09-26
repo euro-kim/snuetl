@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Snuetl.Windows.App", "src\Snuetl.Windows.App\Snuetl.Windows.App.csproj", "{512771E3-48E3-48EB-915D-3B26EBBBE4BE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Snuetl.Windows.Tests", "tests\Snuetl.Windows.Tests\Snuetl.Windows.Tests.csproj", "{5FD0AE39-C7B5-41F5-8F5A-B42799F453D8}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|x64 = Debug|x64
+        Release|x64 = Release|x64
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {512771E3-48E3-48EB-915D-3B26EBBBE4BE}.Debug|x64.ActiveCfg = Debug|Any CPU
+        {512771E3-48E3-48EB-915D-3B26EBBBE4BE}.Debug|x64.Build.0 = Debug|Any CPU
+        {512771E3-48E3-48EB-915D-3B26EBBBE4BE}.Release|x64.ActiveCfg = Release|Any CPU
+        {512771E3-48E3-48EB-915D-3B26EBBBE4BE}.Release|x64.Build.0 = Release|Any CPU
+        {5FD0AE39-C7B5-41F5-8F5A-B42799F453D8}.Debug|x64.ActiveCfg = Debug|Any CPU
+        {5FD0AE39-C7B5-41F5-8F5A-B42799F453D8}.Debug|x64.Build.0 = Debug|Any CPU
+        {5FD0AE39-C7B5-41F5-8F5A-B42799F453D8}.Release|x64.ActiveCfg = Release|Any CPU
+        {5FD0AE39-C7B5-41F5-8F5A-B42799F453D8}.Release|x64.Build.0 = Release|Any CPU
+    EndGlobalSection
+EndGlobal

@@ -1,0 +1,69 @@
+<Window x:Class="Snuetl.Windows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SNUETL" Width="570" Height="560"
+        ResizeMode="NoResize" WindowStartupLocation="CenterScreen">
+    <Grid Background="#F6F8FC">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="28">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                    <Border Width="48" Height="48" CornerRadius="10" Background="{StaticResource BrandBrush}">
+                        <TextBlock Text="S" Foreground="White" FontSize="30" FontWeight="Bold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="SNUETL" FontSize="24" FontWeight="SemiBold" />
+                        <TextBlock Text="Your course files in File Explorer" Foreground="#596273" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border Background="White" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock x:Name="StateText" Text="Starting…" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock x:Name="AccountText" Margin="0,7,0,0" />
+                        <TextBlock x:Name="RefreshText" Margin="0,4,0,0" Foreground="#596273" />
+                        <TextBlock x:Name="ErrorText" Margin="0,10,0,0" Foreground="#B42318"
+                                   TextWrapping="Wrap" Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+
+                <Border Background="White" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="SNUETL folder" FontWeight="SemiBold" />
+                        <DockPanel Margin="0,8,0,4">
+                            <Button DockPanel.Dock="Right" Content="Browse…" Click="Browse_Click" Margin="8,0,0,0" />
+                            <TextBox x:Name="RootText" VerticalContentAlignment="Center" Padding="8"
+                                     IsReadOnly="True" />
+                        </DockPanel>
+                        <TextBlock Text="Local files placed here stay on this computer and are never uploaded."
+                                   Foreground="#596273" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="SignInPanel" Background="White" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="Connect your SNU eTL account" FontWeight="SemiBold" FontSize="16" />
+                        <TextBlock Margin="0,6,0,12" TextWrapping="Wrap"
+                                   Text="A separate browser will open for SNU login and MFA. SNUETL will then try to create its Canvas API token automatically." />
+                        <Button Content="Sign in and configure automatically" Click="Connect_Click"
+                                Background="{StaticResource BrandBrush}" Foreground="White" HorizontalAlignment="Left" />
+                        <Separator Margin="0,8" />
+                        <TextBlock Text="If automatic token creation fails, paste a Canvas API token:" />
+                        <PasswordBox x:Name="TokenBox" Padding="8" Margin="0,8" />
+                        <WrapPanel>
+                            <Button Content="Validate and save token" Click="ManualConnect_Click" />
+                            <Button Content="Open Canvas token settings" Click="TokenSettings_Click" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+
+                <WrapPanel>
+                    <Button Content="Open folder" Click="Open_Click" />
+                    <Button Content="Refresh now" Click="Refresh_Click" />
+                    <Button Content="Sign out" Click="SignOut_Click" />
+                    <Button Content="Close" Click="Close_Click" />
+                </WrapPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

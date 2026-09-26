@@ -5,6 +5,8 @@ __pycache__/
 .coverage
 dist/
 build/
+bin/
+obj/
 *.egg-info/
 *.part
 .env

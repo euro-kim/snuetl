@@ -34,6 +34,7 @@ stored, and unattended commands fail closed when renewed verification is require
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Windows virtual-drive client](#windows-virtual-drive-client)
 - [Codex desktop skill for macOS and Windows](#codex-desktop-skill-for-macos-and-windows)
 - [Docker Compose deployment](#docker-compose-deployment)
 - [Raspberry Pi and Linux ARM64](#raspberry-pi-and-linux-arm64)
@@ -110,6 +111,23 @@ python3 -m venv .venv
 python -m pip install -e '.[test]'
 snuetl
 ```
+
+## Windows virtual-drive client
+
+The experimental Windows 10/11 x64 client in [`windows-client/`](windows-client/)
+installs as a tray application and exposes active-course content as on-demand files in
+File Explorer. It uses the Windows Cloud Files API, stores its Canvas token in Windows
+Credential Manager, checks for changes every 15 minutes, and never uploads local files.
+Announcements, pages, and syllabi are exposed as Markdown alongside normal course files.
+
+Build `SNUETLSetup.exe` on native Windows with:
+
+```powershell
+pwsh windows-client/build.ps1
+```
+
+The pilot installer is unsigned unless a signing command is supplied. See the Windows
+client README for build requirements, local-file conflict behavior, and test commands.
 
 ## Codex desktop skill for macOS and Windows
 
