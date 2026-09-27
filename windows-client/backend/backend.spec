@@ -11,7 +11,7 @@ a = Analysis(
     datas=[],
     hiddenimports=["keyring.backends.Windows", "tzdata"],
     hookspath=[],
-    excludes=["discord", "telegram"],
+    excludes=["discord", "telegram", "playwright", "yt_dlp", "pytest", "tkinter", "PIL", "numpy", "keyring.backends.macOS", "keyring.backends.SecretService", "snuetl.codex_desktop", "snuetl.browser", "snuetl.lms_session", "snuetl.profile", "rich", "pygments"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -21,7 +21,8 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="snuetl-windows-backend",
-    console=False,
+    # The parent redirects these streams and uses CreateNoWindow to hide the worker.
+    console=True,
 )
 coll = COLLECT(
     exe,

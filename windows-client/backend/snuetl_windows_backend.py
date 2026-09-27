@@ -24,7 +24,10 @@ import yaml
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
-from snuetl import codex_desktop
+import windows_auth as codex_desktop
+import shutil
+import subprocess
+from snuetl import __version__
 from snuetl.canvas_api import TOKEN_PATTERN, CanvasClient, CanvasToken, _http_json
 from snuetl.config import Config
 from snuetl.downloader import TokenDownloader
@@ -116,12 +119,24 @@ def auth_status(verify: bool = False) -> dict[str, Any]:
     return result
 
 
+def addon_executable() -> Path:
+    return data_dir() / "addons" / "signin" / "snuetl-signin.exe"
+
+
+def capabilities() -> dict[str, Any]:
+    return {"version": __version__, "api": True, "academic": True,
+            "automatic_signin": addon_executable().is_file(), "browser_free": True}
+
+
 def auth_auto() -> dict[str, Any]:
-    _prepare_desktop_helper()
-    try:
-        return codex_desktop._browser_operation(rotate=False, disconnect=False)
-    except codex_desktop.DesktopError as exc:
-        raise BackendError(exc.code, str(exc)) from exc
+    executable = addon_executable()
+    if not executable.is_file():
+        raise BackendError("OPTIONAL_COMPONENT_MISSING", "Install Automatic sign-in in Settings, or paste a Canvas API token.")
+    result = subprocess.run([str(executable)], capture_output=True, text=True, encoding="utf-8",
+                            timeout=660, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if result.returncode:
+        raise BackendError("SIGNIN_FAILED", "Automatic sign-in did not complete. Try again or use a manual token.")
+    return auth_status(verify=True)
 
 
 def _validate_origin(origin: str) -> str:
@@ -185,15 +200,12 @@ def auth_manual(value: str, origin: str = "https://myetl.snu.ac.kr") -> dict[str
 def auth_disconnect() -> dict[str, Any]:
     _prepare_desktop_helper()
     token = codex_desktop._load_token()
-    if token is None:
-        return {"connected": False, "revoked": False}
-    if token.token_id.startswith("manual:"):
+    if token is not None:
         codex_desktop._delete_token(token)
-        return {"connected": False, "revoked": False, "manual": True}
-    try:
-        return codex_desktop._browser_operation(rotate=False, disconnect=True)
-    except codex_desktop.DesktopError as exc:
-        raise BackendError(exc.code, str(exc)) from exc
+    # Local disconnect never opens a browser; revoke tokens explicitly in Canvas.
+    for name in ("academic.json", "manifest.json"):
+        (data_dir() / name).unlink(missing_ok=True)
+    return {"connected": False, "revoked": False}
 
 
 def sanitize_component(value: str, fallback: str, limit: int = 100) -> str:
@@ -473,7 +485,7 @@ def hydrate(identity: dict[str, Any]) -> dict[str, Any]:
     target = target_dir / f"{uuid.uuid4()}.part"
     cache_path = match.get("cache_path")
     if cache_path:
-        target.write_bytes(Path(str(cache_path)).read_bytes())
+        shutil.copyfile(str(cache_path), target)
     else:
         url = str(match.get("download_url") or "")
         if not url:
@@ -493,13 +505,19 @@ def hydrate(identity: dict[str, Any]) -> dict[str, Any]:
             token.origin, token.value, timeout_seconds=60, retry_count=2
         ) as downloader:
             downloader.download(remote, target)
-    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    with target.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return {"path": str(target), "size": target.stat().st_size, "sha256": digest}
 
 
 def dispatch(method: str, params: dict[str, Any]) -> Any:
     if method == "ping":
         return {"protocol_version": PROTOCOL_VERSION}
+    if method == "capabilities":
+        return capabilities()
+    if method == "academic.snapshot":
+        from academic import snapshot
+        return snapshot(data_dir(), _config(), _token(), refresh=bool(params.get("refresh")), preferences=params.get("preferences") or {})
     if method == "auth.status":
         return auth_status(bool(params.get("verify", False)))
     if method == "auth.auto":
@@ -521,53 +539,41 @@ def dispatch(method: str, params: dict[str, Any]) -> Any:
 
 
 def serve(input_stream: TextIO = sys.stdin, output_stream: TextIO = sys.stdout) -> int:
-    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-    for raw in input_stream:
+    # Hydration has its own bounded lane, so opening a file never waits behind
+    # a whole course refresh. Account/catalog mutations remain serial.
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+    output_lock = Lock()
+    def respond(request):
+        request_id = request.get("id")
         try:
-            request = json.loads(raw)
-            request_id = request.get("id")
-            method = str(request["method"])
             params = request.get("params") or {}
             if not isinstance(params, dict):
                 raise BackendError("INVALID_REQUEST", "params must be an object")
-            result = dispatch(method, params)
+            result = dispatch(str(request["method"]), params)
             response = {"id": request_id, "ok": True, "result": result}
-            should_stop = method == "shutdown"
-        except BackendError as exc:
-            response = {
-                "id": locals().get("request_id"),
-                "ok": False,
-                "error": {"code": exc.code, "message": str(exc)},
-            }
-            should_stop = False
+        except (BackendError, codex_desktop.DesktopError) as exc:
+            response = {"id": request_id, "ok": False, "error": {"code": exc.code, "message": str(exc)}}
         except AuthenticationRequired as exc:
-            response = {
-                "id": locals().get("request_id"),
-                "ok": False,
-                "error": {"code": "AUTHENTICATION_REQUIRED", "message": str(exc)},
-            }
-            should_stop = False
+            response = {"id": request_id, "ok": False, "error": {"code": "AUTHENTICATION_REQUIRED", "message": str(exc)}}
         except DiscoveryError as exc:
-            response = {
-                "id": locals().get("request_id"),
-                "ok": False,
-                "error": {"code": "CANVAS_ERROR", "message": str(exc)},
-            }
-            should_stop = False
-        except Exception as exc:
-            # Tracebacks go only to the private stderr log; stdout remains a
-            # token-free protocol stream.
+            response = {"id": request_id, "ok": False, "error": {"code": "CANVAS_ERROR", "message": str(exc)}}
+        except Exception:
             traceback.print_exc(file=sys.stderr)
-            response = {
-                "id": locals().get("request_id"),
-                "ok": False,
-                "error": {"code": "INTERNAL", "message": str(exc)},
-            }
-            should_stop = False
-        output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
-        output_stream.flush()
-        if should_stop:
-            return 0
+            response = {"id": request_id, "ok": False, "error": {"code": "INTERNAL", "message": "The requested operation failed. Check the private backend log."}}
+        with output_lock:
+            output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
+            output_stream.flush()
+    with ThreadPoolExecutor(max_workers=1) as background, ThreadPoolExecutor(max_workers=2) as downloads:
+        for raw in input_stream:
+            try:
+                request = json.loads(raw)
+                if not isinstance(request, dict): raise ValueError()
+            except ValueError:
+                request = {"method": "invalid.request"}
+            pool = downloads if request.get("method") == "content.hydrate" else background
+            pool.submit(respond, request)
+            if request.get("method") == "shutdown": break
     return 0
 
 

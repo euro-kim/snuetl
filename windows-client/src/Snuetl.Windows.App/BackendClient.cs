@@ -41,7 +41,7 @@ public sealed class BackendClient : IAsyncDisposable
         start.RedirectStandardInput = true;
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
-        start.StandardInputEncoding = System.Text.Encoding.UTF8;
+        start.StandardInputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         start.StandardOutputEncoding = System.Text.Encoding.UTF8;
         start.Environment["SNUETL_WINDOWS_DATA_DIR"] = dataDirectory;
         start.Environment["PYTHONIOENCODING"] = "utf-8";

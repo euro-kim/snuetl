@@ -8,9 +8,10 @@ $env:PLAYWRIGHT_BROWSERS_PATH = '0'
 python -m playwright install chromium
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the bundled browser' }
 pyinstaller --clean --noconfirm --onedir --name snuetl-codex --paths src `
+  --distpath windows-client/codex-helper/dist --workpath windows-client/codex-helper/build --specpath windows-client/codex-helper/build `
   --hidden-import keyring.backends.Windows --collect-data tzdata `
   --exclude-module snuetl.lms_session `
-  packaging/codex_entry.py
+  src/snuetl/codex_entry.py
 if ($LASTEXITCODE -ne 0) { throw 'Could not build the helper' }
 
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
@@ -19,9 +20,9 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
   $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
 }
 $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
-$payload = (Resolve-Path 'dist/snuetl-codex').Path
+$payload = (Resolve-Path 'windows-client/codex-helper/dist/snuetl-codex').Path
 $skill = (Resolve-Path '.agents/skills/snuetl/SKILL.md').Path
 wix build -arch x64 -d "ProductVersion=$version" -d "PayloadDir=$payload" `
-  -d "SkillFile=$skill" packaging/windows/SNUETL-Codex.wxs `
-  -out "dist/snuetl-codex-windows-x64.msi"
+  -d "SkillFile=$skill" windows-client/codex-helper/SNUETL-Codex.wxs `
+  -out "windows-client/codex-helper/dist/snuetl-codex-windows-x64.msi"
 if ($LASTEXITCODE -ne 0) { throw 'Could not build the MSI' }

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   printf '%s\n' \
-    'Usage: ./setup.sh [--install-only] [snuetl setup options]' \
+    'Usage: bash linux-client/setup.sh [--install-only] [snuetl setup options]' \
     '' \
     'Installs pipx when needed, installs snuetl with all dependencies, and' \
     'starts the guided setup. Use --install-only for agents and automation.'
@@ -41,7 +41,7 @@ fi
 "${pipx_command[@]}" ensurepath >/dev/null
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 printf '%s\n' 'Installing snuetl and its browser/downloader dependencies…'
-"${pipx_command[@]}" install --force --include-deps "$script_dir"
+"${pipx_command[@]}" install --force --include-deps "$script_dir/.."
 
 if "$install_only"; then
   printf '%s\n' 'snuetl is installed. Run `snuetl setup` when interactive login is available.'

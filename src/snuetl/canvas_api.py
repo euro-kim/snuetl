@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
+import time as monotonic_time
+import random
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -75,6 +78,9 @@ def save_token(config: Config, token: CanvasToken) -> None:
     os.replace(temporary, path)
 
 
+_COURSE_CACHE: dict[tuple[str, str, str], tuple[float, list[dict[str, Any]]]] = {}
+
+
 class CanvasClient:
     def __init__(self, config: Config, token: CanvasToken | None = None):
         self.token = token or load_token(config)
@@ -107,9 +113,23 @@ class CanvasClient:
             raise DiscoveryError("Canvas API pagination left the authenticated eTL origin")
         return url
 
+    def _send(self, method: str, url: str) -> httpx.Response:
+        for attempt in range(4):
+            response = self._http.request(method, url)
+            if response.status_code != 429:
+                return response
+            if attempt == 3:
+                return response
+            try:
+                delay = min(60, max(1, float(response.headers.get("Retry-After", 2 ** (attempt + 1)))))
+            except ValueError:
+                delay = 2 ** (attempt + 1)
+            monotonic_time.sleep(delay + random.uniform(0, 0.5))
+        return response
+
     def request(self, method: str, path: str) -> Any:
         try:
-            response = self._http.request(method, self._url(path))
+            response = self._send(method, self._url(path))
         except httpx.HTTPError as exc:
             raise DiscoveryError("Canvas API request failed; check network access") from exc
         if response.status_code == 401:
@@ -130,6 +150,11 @@ class CanvasClient:
             raise DiscoveryError("Canvas API returned invalid JSON") from exc
 
     def pages(self, path: str) -> list[dict[str, Any]]:
+        cache_key = (self.token.origin, self.token.user_id + "|" + self.token.token_id, path)
+        cacheable = path.startswith("/api/v1/courses?")
+        cached = _COURSE_CACHE.get(cache_key) if cacheable else None
+        if cached and monotonic_time.monotonic() - cached[0] < 300:
+            return [dict(row) for row in cached[1]]
         values: list[dict[str, Any]] = []
         next_url: str | None = path
         seen: set[str] = set()
@@ -139,7 +164,7 @@ class CanvasClient:
                 raise DiscoveryError("Canvas API pagination loop detected")
             seen.add(url)
             try:
-                response = self._http.get(url)
+                response = self._send("GET", url)
             except httpx.HTTPError as exc:
                 raise DiscoveryError("Canvas API request failed; check network access") from exc
             if response.status_code == 401:
@@ -165,6 +190,9 @@ class CanvasClient:
                 if match:
                     next_url = match.group(1)
                     break
+        if cacheable:
+            if len(_COURSE_CACHE) > 32: _COURSE_CACHE.clear()
+            _COURSE_CACHE[cache_key] = (monotonic_time.monotonic(), values)
         return values
 
 
@@ -288,9 +316,9 @@ def _create_token_in_ui(
     ) as created:
         submit.click()
     response = created.value
-    if response.status != 200:
+    if not 200 <= response.status < 300:
         raise DiscoveryError(f"Canvas token creation failed with HTTP {response.status}")
-    payload = response.json()
+    payload = _response_json(response)
     if isinstance(payload, dict):
         value = payload.get("visible_token") or payload.get("token")
         if isinstance(value, str) and value:
@@ -586,6 +614,8 @@ def live_data(
                             "course_id": course_id,
                             "course_name": names.get(course_id),
                             "announcement_id": item.get("id"),
+                            "content_revision": hashlib.sha256(str(item.get("message") or "").encode()).hexdigest(),
+                            "updated_at": item.get("updated_at"),
                             "title": item.get("title"),
                             "posted_at": item.get("posted_at"),
                             "summary": _excerpt(item.get("message")),
@@ -743,6 +773,7 @@ def live_data(
                 path = f"/api/v1/calendar_events?start_date={first}&end_date={last}&per_page=100{contexts}"
                 rows.extend(
                     {
+                        "event_id": item.get("id"),
                         "course_id": str(item.get("context_code") or "").removeprefix("course_"),
                         "title": item.get("title"),
                         "start_at": item.get("start_at"),

@@ -300,7 +300,9 @@ def _browser_operation(*, rotate: bool, disconnect: bool) -> dict[str, Any]:
                     result["warning"] = "The previous token may still be active; review Canvas Account Settings"
             return result
         finally:
-            browser.close()
+            # Browser/driver shutdown must not hide the actual setup error.
+            with suppress(Exception):
+                browser.close()
 
 
 def _query(args: argparse.Namespace) -> list[dict[str, Any]]:

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Snuetl.Windows;
 
@@ -10,14 +11,22 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
     private static readonly Guid ProviderId = new("8532A890-8B27-4A75-9849-BFC7D892539D");
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string root;
+    private readonly string? registrationId;
     private readonly string indexPath;
     private readonly BackendClient backend;
     private readonly SemaphoreSlim indexLock = new(1, 1);
     private readonly ConcurrentDictionary<long, CancellationTokenSource> hydrations = new();
+    private readonly ConcurrentDictionary<long, Task> hydrationTasks = new();
     private readonly CloudFilesNative.Callback fetchCallback;
     private readonly CloudFilesNative.Callback cancelCallback;
     private CloudFilesNative.ConnectionKey connectionKey;
     private bool connected;
+    private FileSystemWatcher? pinWatcher;
+    private readonly CancellationTokenSource pinLifetime = new();
+    private readonly Channel<string> pinChanges = Channel.CreateBounded<string>(
+        new BoundedChannelOptions(1) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
+    private readonly SemaphoreSlim hydrationSlots = new(2, 2);
+    private Task? pinWorker;
     private Dictionary<string, IndexEntry> index = new(StringComparer.OrdinalIgnoreCase);
 
     private sealed record IndexEntry(
@@ -31,9 +40,10 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         [property: System.Text.Json.Serialization.JsonPropertyName("size")] long Size,
         [property: System.Text.Json.Serialization.JsonPropertyName("sha256")] string Sha256);
 
-    public CloudFilesProvider(string root, string dataDirectory, BackendClient backend)
+    public CloudFilesProvider(string root, string dataDirectory, BackendClient backend, string? registrationId = null)
     {
         this.root = Path.GetFullPath(root);
+        this.registrationId = registrationId;
         this.backend = backend;
         indexPath = Path.Combine(dataDirectory, "placeholder-index.json");
         fetchCallback = OnFetchData;
@@ -41,7 +51,10 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         LoadIndex();
     }
 
-    public void RegisterAndConnect()
+    public event Action<string>? FileDownloaded;
+    public event Action<string, string>? FileActivity;
+
+    public async Task RegisterAndConnectAsync()
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
         {
@@ -85,7 +98,7 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
                 Population = new CloudFilesNative.Policy { Primary = 3, Modifier = 0 },
                 // Data writes always clear in-sync; tracking last-write metadata
                 // additionally makes ordinary editor saves visible.
-                InSync = 0x00000010,
+                InSync = 0x00000100,
                 HardLink = 0,
                 PlaceholderManagement = 0,
             };
@@ -108,6 +121,8 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         {
             Marshal.FreeHGlobal(identityPointer);
         }
+
+        await ExplorerSyncRoot.RegisterAsync(root, registrationId);
 
         var callbacks = new[]
         {
@@ -136,6 +151,97 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
                 out connectionKey),
             "Sync-root connection");
         connected = true;
+        pinWatcher = new FileSystemWatcher(root)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.Attributes | NotifyFilters.LastWrite | NotifyFilters.Size,
+        };
+        pinWatcher.Changed += (_, args) => pinChanges.Writer.TryWrite(root);
+        pinWatcher.Error += (_, _) => pinChanges.Writer.TryWrite(root);
+        pinWorker = Task.Run(() => ProcessPinChangesAsync(pinLifetime.Token));
+        pinWatcher.EnableRaisingEvents = true;
+        pinChanges.Writer.TryWrite(root);
+    }
+
+    private async Task ProcessPinChangesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var observedPinStates = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+            var observedWrites = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            await foreach (var changed in pinChanges.Reader.ReadAllAsync(cancellationToken))
+            {
+                await Task.Delay(350, cancellationToken).ConfigureAwait(false);
+                while (pinChanges.Reader.TryRead(out _)) { }
+                IndexEntry[] entries;
+                await indexLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    entries = index.Values.Where(item =>
+                    {
+                        var path = Absolute(item.RelativePath);
+                        return path.Equals(changed, StringComparison.OrdinalIgnoreCase)
+                            || path.StartsWith(changed.TrimEnd(Path.DirectorySeparatorChar)
+                                + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                    }).ToArray();
+                }
+                finally { indexLock.Release(); }
+                foreach (var entry in entries)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var path = Absolute(entry.RelativePath);
+                        var file = new FileInfo(path);
+                        if (!file.Exists) continue;
+                        var attributes = (uint)file.Attributes;
+                        var write = file.LastWriteTimeUtc.Ticks;
+                        if (!CloudFilesNative.IsCloudOnly(attributes) && write != entry.LastWriteUtcTicks
+                            && (!observedWrites.TryGetValue(path, out var previousWrite) || previousWrite != write))
+                            FileActivity?.Invoke("Local changes detected · kept on this device", entry.RelativePath);
+                        observedWrites[path] = write;
+                        var pinState = attributes & (CloudFilesNative.FileAttributePinned | CloudFilesNative.FileAttributeUnpinned);
+                        if (observedPinStates.TryGetValue(path, out var previous) && previous == pinState) continue;
+                        observedPinStates[path] = pinState;
+                        var offline = CloudFilesNative.IsCloudOnly(attributes);
+                        var hydrate = offline && (attributes & CloudFilesNative.FileAttributePinned) != 0;
+                        var dehydrate = !offline && (attributes & CloudFilesNative.FileAttributeUnpinned) != 0;
+                        if (!hydrate && !dehydrate) continue;
+                        // Never discard locally edited content when the user frees space.
+                        if (dehydrate && (file.LastWriteTimeUtc.Ticks != entry.LastWriteUtcTicks
+                            || file.Length != entry.Size)) continue;
+                        using var handle = CloudFilesNative.CreateFileW(path, 0, 7, IntPtr.Zero, 3, 0, IntPtr.Zero);
+                        if (handle.IsInvalid) throw new IOException("Could not open the placeholder metadata");
+                        CloudFilesNative.ThrowIfFailed(hydrate
+                            ? CloudFilesNative.CfHydratePlaceholder(handle, 0, long.MaxValue, 0, IntPtr.Zero)
+                            : CloudFilesNative.CfDehydratePlaceholder(handle, 0, long.MaxValue, 0, IntPtr.Zero),
+                            hydrate ? "Pinning content" : "Freeing local space");
+                        FileActivity?.Invoke(hydrate ? "Available offline" : "Freed space · available online", entry.RelativePath);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        LogCloudError("Pin-state update", exception);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    private void LogCloudError(string operation, Exception exception)
+    {
+        try
+        {
+            var detail = exception is BackendException backendError ? backendError.Code
+                : exception is InvalidOperationException ? exception.Message
+                : $"{exception.GetType().Name} (0x{exception.HResult:X8})";
+            var log = Path.Combine(Path.GetDirectoryName(indexPath)!, "cloud-files.log");
+            if (File.Exists(log) && new FileInfo(log).Length > 1_000_000)
+                File.Move(log, log + ".old", true);
+            File.AppendAllText(log, $"{DateTimeOffset.Now:u} {operation}: {detail}{Environment.NewLine}");
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     public async Task<IReadOnlyList<LocalEntry>> SnapshotAsync(CancellationToken cancellationToken)
@@ -155,7 +261,7 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
                 }
                 var info = new FileInfo(path);
                 var attributes = (uint)info.Attributes;
-                var hydrated = (attributes & (uint)FileAttributes.Offline) == 0;
+                var hydrated = !CloudFilesNative.IsCloudOnly(attributes);
                 var pinned = (attributes & CloudFilesNative.FileAttributePinned) != 0;
                 var inSync = info.LastWriteTimeUtc.Ticks == item.LastWriteUtcTicks;
                 result.Add(new LocalEntry(
@@ -404,11 +510,14 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         var parameters = Marshal.PtrToStructure<CloudFilesNative.FetchDataParameters>(parametersPointer);
         var identity = new byte[checked((int)info.FileIdentityLength)];
         Marshal.Copy(info.FileIdentity, identity, 0, identity.Length);
+        var requestedPath = Marshal.PtrToStringUni(info.NormalizedPath) ?? root;
         var cancellation = new CancellationTokenSource();
         hydrations[info.RequestKey.Internal] = cancellation;
-        _ = Task.Run(
-            () => HydrateAsync(info, parameters, identity, cancellation.Token),
+        var task = Task.Run(
+            () => HydrateAsync(info, parameters, identity, requestedPath, cancellation.Token),
             CancellationToken.None);
+        hydrationTasks[info.RequestKey.Internal] = task;
+        _ = task.ContinueWith(completed => { hydrationTasks.TryRemove(info.RequestKey.Internal, out _); }, TaskScheduler.Default);
     }
 
     private void OnCancelFetchData(IntPtr infoPointer, IntPtr parametersPointer)
@@ -426,11 +535,14 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         CloudFilesNative.CallbackInfo info,
         CloudFilesNative.FetchDataParameters parameters,
         byte[] identityBytes,
+        string requestedPath,
         CancellationToken cancellationToken)
     {
         string? temporary = null;
+        var acquired = false;
         try
         {
+            await hydrationSlots.WaitAsync(cancellationToken).ConfigureAwait(false); acquired = true;
             var identity = JsonSerializer.Deserialize<PlaceholderIdentity>(identityBytes)
                 ?? throw new InvalidOperationException("Placeholder identity is empty");
             var result = await backend.InvokeAsync<HydrationResult>(
@@ -462,13 +574,15 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
             {
                 Transfer(info, [], 0, 0, CloudFilesNative.StatusSuccess);
             }
+            FileDownloaded?.Invoke(Path.GetRelativePath(root, requestedPath));
         }
         catch (OperationCanceledException)
         {
             // The platform no longer needs this byte range.
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            LogCloudError("Hydration failed", exception);
             Transfer(
                 info,
                 [],
@@ -479,6 +593,7 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         }
         finally
         {
+            if (acquired) hydrationSlots.Release();
             if (temporary is not null)
             {
                 try { File.Delete(temporary); } catch (IOException) { }
@@ -605,8 +720,9 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         }
     }
 
-    public static void Unregister(string root)
+    public static void Unregister(string root, string? registrationId = null)
     {
+        if (ExplorerSyncRoot.TryUnregister(root, registrationId)) return;
         if (Directory.Exists(root))
         {
             CloudFilesNative.ThrowIfFailed(
@@ -615,31 +731,23 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
         }
     }
 
-    public static void PrepareForUninstall(string root, string dataDirectory)
+    public static void PrepareForUninstall(string root, string dataDirectory, string? registrationId = null)
     {
         var indexPath = Path.Combine(dataDirectory, "placeholder-index.json");
-        List<IndexEntry> entries;
-        try
+        // Walk the actual folder, not only the cached index. Renamed placeholders
+        // and a damaged/missing index must not leave downloaded files provider-dependent.
+        var registered = ExplorerSyncRoot.RegisteredPath(registrationId);
+        if (registered is not null && !string.Equals(Path.GetFullPath(root), Path.GetFullPath(registered), StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The registered sync folder differs from the cleanup target.");
+        if (registered is not null) _ = CleanupPaths.ManagedPath(root, "__boundary_check__");
+        foreach (var path in registered is null ? Enumerable.Empty<string>() : EnumerateCloudFiles(root))
         {
-            entries = JsonSerializer.Deserialize<List<IndexEntry>>(File.ReadAllText(indexPath)) ?? [];
-        }
-        catch (Exception exception) when (exception is IOException or JsonException)
-        {
-            entries = [];
-        }
-
-        foreach (var item in entries)
-        {
-            var path = Path.GetFullPath(Path.Combine(root, item.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-            if ((File.GetAttributes(path) & FileAttributes.Offline) != 0)
+            if (CloudFilesNative.IsCloudOnly((uint)File.GetAttributes(path)))
             {
                 File.Delete(path);
                 continue;
             }
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0) continue;
             IntPtr handle = IntPtr.Zero;
             try
             {
@@ -662,11 +770,39 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
             }
         }
         File.Delete(indexPath);
-        Unregister(root);
+        if (!ExplorerSyncRoot.TryUnregister(root, registrationId))
+            ExplorerSyncRoot.RemoveNavigationEntry(registrationId);
     }
 
-    public ValueTask DisposeAsync()
+    private static IEnumerable<string> EnumerateCloudFiles(string root)
     {
+        if (!Directory.Exists(root)) yield break;
+        var pending = new Stack<string>(); pending.Push(root);
+        while (pending.Count > 0)
+        {
+            foreach (var path in Directory.EnumerateFileSystemEntries(pending.Pop()))
+            {
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    if ((attributes & FileAttributes.ReparsePoint) == 0) pending.Push(path);
+                    continue;
+                }
+                if ((attributes & FileAttributes.ReparsePoint) == 0) continue;
+                using var handle = CloudFilesNative.CreateFileW(path, 0, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+                if (handle.IsInvalid || !CloudFilesNative.GetFileInformationByHandleEx(handle, 9, out var info, 8))
+                    throw new IOException("Could not inspect cloud file before uninstall: " + path);
+                if ((CloudFilesNative.CfGetPlaceholderStateFromAttributeTag(info.Attributes, info.ReparseTag) & 1) != 0)
+                    yield return path;
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        pinWatcher?.Dispose();
+        pinChanges.Writer.TryComplete();
+        pinLifetime.Cancel();
         if (connected)
         {
             CloudFilesNative.CfDisconnectSyncRoot(connectionKey);
@@ -677,7 +813,9 @@ public sealed class CloudFilesProvider : IPlaceholderStore, IAsyncDisposable
             cancellation.Cancel();
             cancellation.Dispose();
         }
+        if (pinWorker is not null) await pinWorker.ConfigureAwait(false);
+        await Task.WhenAll(hydrationTasks.Values).ConfigureAwait(false);
+        pinLifetime.Dispose();
         indexLock.Dispose();
-        return ValueTask.CompletedTask;
     }
 }

@@ -10,10 +10,11 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+DOCKER = ROOT / "docker"
 
 
 def test_compose_keeps_one_named_interactive_hardened_container() -> None:
-    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    compose = yaml.safe_load((DOCKER / "compose.yaml").read_text(encoding="utf-8"))
     service = compose["services"]["snuetl"]
 
     assert service["container_name"] == "${SNUETL_CONTAINER_NAME:-snuetl}"
@@ -23,6 +24,9 @@ def test_compose_keeps_one_named_interactive_hardened_container() -> None:
     assert service["restart"] == "unless-stopped"
     assert service["read_only"] is True
     assert service["image"] == "${SNUETL_IMAGE:-snuetl:local}"
+    assert service["build"]["context"] == "."
+    assert (ROOT / service["build"]["dockerfile"]).is_file()
+    assert "seccomp=./docker/seccomp_profile.json" in service["security_opt"]
     assert "SNUETL_SOURCE_REVISION" in service["build"]["args"]
     assert service["ipc"] == "host"
     assert "ports" not in service
@@ -31,7 +35,7 @@ def test_compose_keeps_one_named_interactive_hardened_container() -> None:
 
 
 def test_compose_mounts_every_persistent_directory_at_a_fixed_internal_path() -> None:
-    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    compose = yaml.safe_load((DOCKER / "compose.yaml").read_text(encoding="utf-8"))
     volumes = compose["services"]["snuetl"]["volumes"]
     targets = {volume["target"] for volume in volumes}
 
@@ -45,10 +49,9 @@ def test_compose_mounts_every_persistent_directory_at_a_fixed_internal_path() ->
 
 
 def test_docker_setup_script_owns_the_complete_bootstrap_workflow() -> None:
-    script_path = ROOT / "docker-setup.sh"
+    script_path = DOCKER / "docker-setup.sh"
     script = script_path.read_text(encoding="utf-8")
 
-    assert script_path.stat().st_mode & 0o111
     assert 'cp -- "$ENV_EXAMPLE" "$ENV_FILE"' in script
     assert "set_env_value SNUETL_UID" in script
     assert "set_env_value SNUETL_GID" in script
@@ -66,10 +69,9 @@ def test_docker_setup_script_owns_the_complete_bootstrap_workflow() -> None:
 
 
 def test_docker_update_script_guards_and_explains_the_update_lifecycle() -> None:
-    script_path = ROOT / "docker-update.sh"
+    script_path = DOCKER / "docker-update.sh"
     script = script_path.read_text(encoding="utf-8")
 
-    assert script_path.stat().st_mode & 0o111
     assert "status --porcelain --untracked-files=normal" in script
     assert 'fetch --prune "$REMOTE_NAME" "$DEPLOY_BRANCH"' in script
     assert 'merge-base --is-ancestor "$local_revision" "$remote_revision"' in script
@@ -85,14 +87,14 @@ def test_docker_update_script_guards_and_explains_the_update_lifecycle() -> None
 
 def test_docker_update_script_fast_forwards_and_delegates_rebuild(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    project.mkdir()
-    shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
+    (project / "docker").mkdir(parents=True)
+    shutil.copy2(DOCKER / "docker-update.sh", project / "docker" / "docker-update.sh")
     (project / ".env").write_text(
         "SNUETL_CONTAINER_NAME=snuetl\nSNUETL_IMAGE=snuetl:snuetl\n", encoding="utf-8"
     )
 
     setup_log = tmp_path / "setup.log"
-    fake_setup = project / "docker-setup.sh"
+    fake_setup = project / "docker" / "docker-setup.sh"
     fake_setup.write_text(
         """#!/usr/bin/env bash
 printf '%s\\n' "$*" >"$FAKE_SETUP_LOG"
@@ -155,7 +157,7 @@ if [[ "$*" == *'image inspect --format {{index .Config.Labels "org.opencontainer
     result = subprocess.run(
         [
             "bash",
-            str(project / "docker-update.sh"),
+            str(project / "docker" / "docker-update.sh"),
             "--yes",
             "--project-name",
             "snuetl-test",
@@ -182,13 +184,13 @@ def test_docker_update_checks_running_image_even_when_source_is_current(
     tmp_path: Path, stale_image: bool
 ) -> None:
     project = tmp_path / "project"
-    project.mkdir()
-    shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
+    (project / "docker").mkdir(parents=True)
+    shutil.copy2(DOCKER / "docker-update.sh", project / "docker" / "docker-update.sh")
     (project / ".env").write_text(
         "SNUETL_CONTAINER_NAME=snuetl\nSNUETL_IMAGE=snuetl:snuetl\n", encoding="utf-8"
     )
     setup_marker = tmp_path / "setup-was-called"
-    fake_setup = project / "docker-setup.sh"
+    fake_setup = project / "docker" / "docker-setup.sh"
     fake_setup.write_text(
         '#!/usr/bin/env bash\ntouch "$FAKE_SETUP_MARKER"\n',
         encoding="utf-8",
@@ -249,7 +251,7 @@ esac
         }
     )
     result = subprocess.run(
-        ["bash", str(project / "docker-update.sh"), "--yes"],
+        ["bash", str(project / "docker" / "docker-update.sh"), "--yes"],
         check=False,
         capture_output=True,
         text=True,
@@ -267,13 +269,13 @@ esac
 
 def test_docker_update_restores_prior_image_after_failed_deployment(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    project.mkdir()
-    shutil.copy2(ROOT / "docker-update.sh", project / "docker-update.sh")
+    (project / "docker").mkdir(parents=True)
+    shutil.copy2(DOCKER / "docker-update.sh", project / "docker" / "docker-update.sh")
     (project / ".env").write_text(
         "SNUETL_CONTAINER_NAME=snuetl\nSNUETL_IMAGE=snuetl:snuetl\n", encoding="utf-8"
     )
     failed_marker = tmp_path / "failed-setup"
-    setup = project / "docker-setup.sh"
+    setup = project / "docker" / "docker-setup.sh"
     setup.write_text('#!/usr/bin/env bash\ntouch "$FAILED_MARKER"\nexit 1\n', encoding="utf-8")
     setup.chmod(0o755)
     fake_bin = tmp_path / "bin"
@@ -323,7 +325,7 @@ esac
         }
     )
     result = subprocess.run(
-        ["bash", str(project / "docker-update.sh"), "--yes"],
+        ["bash", str(project / "docker" / "docker-update.sh"), "--yes"],
         capture_output=True,
         text=True,
         env=env,
@@ -341,13 +343,14 @@ def test_docker_setup_script_prepares_storage_and_starts_a_fresh_image(
     existing_private: bool,
 ) -> None:
     project = tmp_path / "project"
-    project.mkdir()
-    for name in ("docker-setup.sh", ".env.example", "compose.yaml", "pyproject.toml"):
-        shutil.copy2(ROOT / name, project / name)
+    (project / "docker").mkdir(parents=True)
+    shutil.copy2(ROOT / "pyproject.toml", project / "pyproject.toml")
+    for name in ("docker-setup.sh", ".env.example", "compose.yaml"):
+        shutil.copy2(DOCKER / name, project / "docker" / name)
 
     env_file = project / ".env"
     env_file.write_text(
-        (ROOT / ".env.example")
+        (DOCKER / ".env.example")
         .read_text(encoding="utf-8")
         .replace("SNUETL_UID=1000", "SNUETL_UID=99999")
         .replace("SNUETL_GID=1000", "SNUETL_GID=99999"),
@@ -390,7 +393,7 @@ fi
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
     environment["FAKE_DOCKER_LOG"] = str(docker_log)
     result = subprocess.run(
-        ["bash", str(project / "docker-setup.sh"), "--yes"],
+        ["bash", str(project / "docker" / "docker-setup.sh"), "--yes"],
         check=False,
         capture_output=True,
         text=True,
@@ -425,7 +428,7 @@ fi
 
 
 def test_container_build_installs_runtime_and_drops_root() -> None:
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    dockerfile = (DOCKER / "Dockerfile").read_text(encoding="utf-8")
 
     assert "FROM python:3.12-bookworm" in dockerfile
     assert "playwright install --with-deps chromium" in dockerfile
@@ -437,7 +440,7 @@ def test_container_build_installs_runtime_and_drops_root() -> None:
 
 def test_env_template_contains_only_non_secret_deployment_settings() -> None:
     values = {}
-    for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+    for line in (DOCKER / ".env.example").read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#"):
             key, value = line.split("=", 1)
             values[key] = value
@@ -458,7 +461,7 @@ def test_env_template_contains_only_non_secret_deployment_settings() -> None:
 
 def test_playwright_seccomp_profile_supports_x86_and_arm_user_namespaces() -> None:
     profile = json.loads(
-        (ROOT / "deployment" / "docker" / "seccomp_profile.json").read_text(encoding="utf-8")
+        (DOCKER / "seccomp_profile.json").read_text(encoding="utf-8")
     )
 
     architectures = {entry["architecture"] for entry in profile["archMap"]}

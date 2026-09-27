@@ -3,9 +3,11 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
-readonly ENV_EXAMPLE="${SCRIPT_DIR}/.env.example"
+readonly ASSET_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Keep existing .env, bind mounts, and Compose project identity rooted in the checkout.
+readonly SCRIPT_DIR="$(cd -- "$ASSET_DIR/.." && pwd -P)"
+readonly COMPOSE_FILE="${ASSET_DIR}/compose.yaml"
+readonly ENV_EXAMPLE="${ASSET_DIR}/.env.example"
 readonly -a ENVIRONMENT_KEYS=(
     SNUETL_CONTAINER_NAME
     SNUETL_UID
@@ -43,7 +45,7 @@ die() {
 
 usage() {
     cat <<'EOF'
-Usage: ./docker-setup.sh [--yes] [--env-file PATH] [--project-name NAME]
+Usage: bash docker/docker-setup.sh [--yes] [--env-file PATH] [--project-name NAME]
 
 Prepare host directories, rebuild the image without stale cache, and start snuetl
 with Docker Compose in detached mode.
@@ -421,9 +423,9 @@ for attempt in {1..45}; do
         printf '\n'
         compose ps
         log "Deployment is healthy. Continue with:"
-        printf '  docker compose exec snuetl snuetl setup --headless\n'
-        printf '  docker compose exec snuetl snuetl discord\n'
-        printf '  docker compose exec snuetl snuetl doctor\n'
+        printf '  docker compose --project-directory . -f docker/compose.yaml exec snuetl snuetl setup --headless\n'
+        printf '  docker compose --project-directory . -f docker/compose.yaml exec snuetl snuetl discord\n'
+        printf '  docker compose --project-directory . -f docker/compose.yaml exec snuetl snuetl doctor\n'
         exit 0
     fi
     if [[ "$container_state" == exited || "$container_state" == dead || \

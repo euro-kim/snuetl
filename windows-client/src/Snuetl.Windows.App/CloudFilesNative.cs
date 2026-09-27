@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace Snuetl.Windows;
 
@@ -7,17 +8,21 @@ internal static class CloudFilesNative
     internal const uint FileAttributeNormal = 0x00000080;
     internal const uint FileAttributePinned = 0x00080000;
     internal const uint FileAttributeUnpinned = 0x00100000;
+    internal const uint FileAttributeRecallOnDataAccess = 0x00400000;
+
+    internal static bool IsCloudOnly(uint attributes) =>
+        (attributes & ((uint)FileAttributes.Offline | FileAttributeRecallOnDataAccess)) != 0;
     internal const uint PlaceholderMarkInSync = 0x00000002;
     internal const uint RegisterUpdate = 0x00000001;
     internal const uint RegisterMarkRootInSync = 0x00000004;
-    internal const uint ConnectRequireFullPath = 0x00000002;
+    internal const uint ConnectRequireFullPath = 0x00000004;
     internal const uint UpdateVerifyInSync = 0x00000001;
     internal const uint UpdateMarkInSync = 0x00000002;
     internal const uint UpdateDehydrate = 0x00000004;
     internal const uint OpenFileExclusive = 0x00000001;
     internal const uint OpenFileWriteAccess = 0x00000002;
-    internal const uint PinStatePinned = 2;
-    internal const uint PinStateUnpinned = 3;
+    internal const uint PinStatePinned = 1;
+    internal const uint PinStateUnpinned = 2;
     internal const uint InSyncStateInSync = 1;
     internal const int CallbackFetchData = 0;
     internal const int CallbackCancelFetchData = 2;
@@ -233,6 +238,19 @@ internal static class CloudFilesNative
         IntPtr updateUsn,
         IntPtr overlapped);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern SafeFileHandle CreateFileW(
+        string path, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
+        uint creationDisposition, uint flags, IntPtr template);
+
+    [DllImport("CldApi.dll")]
+    internal static extern int CfHydratePlaceholder(
+        SafeFileHandle fileHandle, long startingOffset, long length, uint flags, IntPtr overlapped);
+
+    [DllImport("CldApi.dll")]
+    internal static extern int CfDehydratePlaceholder(
+        SafeFileHandle fileHandle, long startingOffset, long length, uint flags, IntPtr overlapped);
+
     [DllImport("CldApi.dll")]
     internal static extern int CfSetPinState(
         IntPtr fileHandle,
@@ -264,4 +282,12 @@ internal static class CloudFilesNative
             throw new InvalidOperationException($"{operation} failed with HRESULT 0x{result:X8}");
         }
     }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct AttributeTagInfo { public uint Attributes; public uint ReparseTag; }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetFileInformationByHandleEx(Microsoft.Win32.SafeHandles.SafeFileHandle handle,
+        int informationClass, out AttributeTagInfo info, uint size);
+    [DllImport("cldapi.dll")]
+    internal static extern uint CfGetPlaceholderStateFromAttributeTag(uint attributes, uint reparseTag);
 }

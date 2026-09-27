@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Snuetl.Windows.SettingsView">
+    <Grid Background="#F5F5F8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Border Background="{StaticResource BrandBrush}" Padding="28,24">
+            <DockPanel>
+                <Border DockPanel.Dock="Left" Background="White" CornerRadius="10" Padding="6" Margin="0,0,16,0">
+                    <Image x:Name="Logo" Width="44" Height="44"/>
+                </Border>
+                <StackPanel>
+                    <TextBlock x:Name="WelcomeText" Text="Make SNUETL yours" Foreground="White" FontSize="25" FontWeight="SemiBold"/>
+                    <TextBlock Text="Course files in Explorer. Ready when you need them." Foreground="#DCDAB2" Margin="0,6,0,0"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <TabControl Grid.Row="1" Margin="24,20,24,0" BorderThickness="0" Background="Transparent">
+            <TabControl.Resources>
+                <Style TargetType="TabItem">
+                    <Setter Property="Padding" Value="18,10"/>
+                    <Setter Property="FontSize" Value="14"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TabItem">
+                                <Border x:Name="TabSurface" Background="Transparent" BorderBrush="Transparent" BorderThickness="0,0,0,3" Padding="{TemplateBinding Padding}" Margin="0,0,6,0">
+                                    <ContentPresenter ContentSource="Header"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="TabSurface" Property="BorderBrush" Value="#0F0F70"/>
+                                        <Setter Property="Foreground" Value="#0F0F70"/>
+                                    </Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="TabSurface" Property="Background" Value="#EEEEF6"/>
+                                    </Trigger>
+                                    <Trigger Property="IsKeyboardFocused" Value="True">
+                                        <Setter TargetName="TabSurface" Property="Background" Value="#E4E4F1"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </TabControl.Resources>
+            <TabItem Header="General">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,18,0,0">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Your account" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
+                                <StackPanel x:Name="SignInPanel">
+                                    <TextBlock Text="Use a Canvas API token, or choose the optional automatic sign-in download below. A browser opens only when you request automatic sign-in." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
+                                    <Button Content="Sign in to SNU eTL" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
+                                    <Expander IsExpanded="True" Header="Use a Canvas API token" Margin="0,16,0,0">
+                                        <StackPanel Margin="0,12,0,0">
+                                            <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="Canvas API token"/>
+                                            <WrapPanel Margin="0,12,0,0">
+                                                <Button Content="Save token" Click="ManualConnect_Click"/>
+                                                <Button Content="Open token settings" Click="TokenSettings_Click"/>
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Expander>
+                                </StackPanel>
+                                <Button x:Name="SignOutButton" Content="Sign out" HorizontalAlignment="Left" Click="SignOut_Click"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Sync folder" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock x:Name="RootText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
+                                <WrapPanel>
+                                    <Button Content="Open folder" Click="Open_Click"/>
+                                    <Button Content="Choose folder…" Click="Browse_Click"/>
+                                </WrapPanel>
+                                <TextBlock Text="Files download when opened. Your local edits stay on this device and are never uploaded." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Sync preferences" Style="{StaticResource SectionTitle}"/>
+                                <CheckBox x:Name="StartupCheck" Content="Start SNUETL when I sign in to Windows"/>
+                                <TextBlock x:Name="StartupStatusText" TextWrapping="Wrap" Foreground="#666666" Margin="0,10"/>
+                                <Button Content="Repair startup" HorizontalAlignment="Left" Click="RepairStartup_Click"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                                    <TextBlock Text="Check for updates every" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <TextBox x:Name="IntervalBox" Width="76" MaxLength="4" AutomationProperties.Name="Sync interval in minutes" Text="15"/>
+                                    <TextBlock Text="minutes" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="1–1,440 minutes. Your new interval takes effect when you choose Done." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Notifications">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,18,0,0">
+                    <Border Style="{StaticResource Card}"><StackPanel>
+                        <TextBlock Text="Choose what reaches you" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="All categories are off until you select them. Existing academic items are silently baselined. Windows notification settings and Do Not Disturb still apply." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,16"/>
+                        <TextBlock Text="Apply to"/>
+                        <ComboBox x:Name="NotificationCourse" SelectionChanged="NotificationCourse_Changed" Margin="0,8,0,16" DisplayMemberPath="Name"/>
+                        <StackPanel x:Name="NotificationChoices"/>
+                        <TextBlock Text="Reminder offsets in hours (comma separated)" Margin="0,16,0,8"/>
+                        <TextBox x:Name="ReminderHours" Text="24, 1" AutomationProperties.Name="Reminder offsets in hours"/>
+                        <TextBlock x:Name="NotificationStatus" TextWrapping="Wrap" Foreground="#666666" Margin="0,16,0,0"/>
+                    </StackPanel></Border>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+            <TabItem Header="Components">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,18,0,0">
+                    <Border Style="{StaticResource Card}"><StackPanel>
+                        <TextBlock Text="Automatic sign-in" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock x:Name="ComponentDescription" TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,16"/>
+                        <CheckBox x:Name="DownloadConsent" IsChecked="True" Content="Download the optional automatic sign-in component" Margin="0,0,0,16"/>
+                        <WrapPanel><Button Content="Download and install" Click="InstallAddon_Click"/><Button Content="Install from ZIP…" Click="LocalAddon_Click"/><Button Content="Remove add-on" Click="RemoveAddon_Click"/></WrapPanel>
+                        <TextBlock x:Name="ComponentStatus" TextWrapping="Wrap" Margin="0,16,0,0"/>
+                        <TextBlock Text="A failed download leaves file sync and manual-token setup fully usable. Removing this component keeps your connected account." Foreground="#666666" TextWrapping="Wrap" Margin="0,16,0,0"/>
+                    </StackPanel></Border>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+            <TabItem Header="Appearance">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,18,0,0">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="One icon, everywhere" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="Choose the icon shown in the Windows tray and beside SNUETL above This PC in File Explorer." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,22"/>
+                                <Border Background="#F5F5F8" CornerRadius="12" Padding="22" Margin="0,0,0,22">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Background="White" CornerRadius="12" Padding="10">
+                                            <Image x:Name="IconPreview" Width="64" Height="64"/>
+                                        </Border>
+                                        <StackPanel VerticalAlignment="Center" Margin="18,0,0,0">
+                                            <TextBlock x:Name="IconChoiceText" FontWeight="SemiBold" FontSize="17"/>
+                                            <TextBlock Text="Explorer + notification area" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                                <WrapPanel>
+                                    <Button Content="Default icon" Click="DefaultIcon_Click" Margin="0,0,8,8"/>
+                                    <Button Content="Use SNU logo" Click="SnuIcon_Click" Margin="0,0,8,8"/>
+                                    <Button Content="Choose image…" Style="{StaticResource PrimaryButton}" Click="CustomIcon_Click" Margin="0,0,0,8"/>
+                                </WrapPanel>
+                                <TextBlock Text="PNG, JPG, BMP or ICO · Up to 10 MB. Images keep their proportions. The SNU logo downloads from snu.ac.kr and uses a white background for visibility." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#EEEDE0" CornerRadius="12" Padding="22">
+                            <StackPanel>
+                                <TextBlock Text="A familiar place for your course files" FontWeight="SemiBold"/>
+                                <TextBlock Text="SNU blue, beige and gray bring a quiet, consistent appearance to your desktop." TextWrapping="Wrap" Foreground="#56564D" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="About &amp; updates">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,18,0,0">
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="SNUETL for Windows" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock x:Name="VersionText" Foreground="{StaticResource BrandBrush}" FontSize="20" Margin="0,0,0,12"/>
+                            <TextBlock Text="SNUETL checks your GitHub releases every week. Download the latest Windows installer here; your account, icon, activity and synced folder are kept." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,18"/>
+                            <Expander Header="Private GitHub release access" Margin="0,0,0,16"><StackPanel Margin="0,12,0,0">
+                                <TextBlock Text="For this private repository, use a fine-grained GitHub token with Contents: read permission for euro-kim/snuetl. Stored in Windows Credential Manager; never included in settings or logs." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,10"/>
+                                <PasswordBox x:Name="GitHubTokenBox" Padding="10" AutomationProperties.Name="GitHub release access token"/>
+                                <WrapPanel Margin="0,10,0,0"><Button Content="Save release access" Click="SaveGitHub_Click"/><Button Content="Remove release access" Click="RemoveGitHub_Click"/></WrapPanel>
+                                <TextBlock x:Name="GitHubAccessStatus" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                            </StackPanel></Expander>
+                            <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                            <ProgressBar x:Name="UpdateProgress" Minimum="0" Maximum="100" Height="5" Visibility="Collapsed" Margin="0,0,0,12"/>
+                            <WrapPanel><Button Content="Check GitHub now" Click="CheckUpdates_Click"/><Button x:Name="InstallUpdateButton" Content="Download &amp; install update" Style="{StaticResource PrimaryButton}" Click="InstallUpdate_Click"/><Button Content="Choose setup file…" Click="Update_Click"/></WrapPanel>
+                            <TextBlock Text="Checks GitHub weekly. Updates download and install only when you choose. The sign-in ZIP is reused independently of the client version." FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,16,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Uninstall SNUETL" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="SNUETL removes its Explorer entry, startup entry, saved credentials, settings, cache and activity. Downloaded files and your local folders stay on this computer. Online-only placeholders are removed; the originals remain on SNU eTL." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+                            <Button Content="Uninstall SNUETL…" Foreground="#B42335" BorderBrush="#F1BBC1" HorizontalAlignment="Left" Margin="0,18,0,0" Click="Uninstall_Click"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel></ScrollViewer>
+            </TabItem>
+        </TabControl>
+        <Border Grid.Row="2" Background="White" BorderBrush="#E1E1EC" BorderThickness="0,1,0,0" Padding="24,16">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Save settings" Style="{StaticResource PrimaryButton}" Margin="16,0,0,0" Click="Done_Click"/>
+                <TextBlock x:Name="FeedbackText" Text="Choose your icon in Appearance, then you’re ready to go." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</UserControl>

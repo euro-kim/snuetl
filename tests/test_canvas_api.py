@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -30,7 +31,8 @@ def _config_and_token(tmp_path: Path) -> tuple[object, canvas_api.CanvasToken]:
 def test_canvas_token_is_private_and_never_appears_in_status(tmp_path: Path) -> None:
     config, token = _config_and_token(tmp_path)
     assert canvas_api.load_token(config) == token
-    assert stat.S_IMODE(config.canvas_token_path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(config.canvas_token_path.stat().st_mode) == 0o600
     status = canvas_api.token_status(config)
     assert status["configured"] is True
     assert token.value not in json.dumps(status)
@@ -126,3 +128,45 @@ def test_live_submission_and_grade_rows_handle_hidden_fields(
     grades = canvas_api.live_data(config, "grades", course="12")
     assert grades[0]["current_score"] == 82
     assert grades[0]["current_grade"] is None
+
+@pytest.mark.parametrize("status", [200, 201])
+def test_token_creation_accepts_guarded_canvas_json(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    token = "1~exampletokenvalue123456789"
+    payload = {"visible_token": token, "id": 77, "expires_at": "2027-09-27T00:00:00Z"}
+
+    def invalid_json() -> None:
+        raise ValueError("Guarded JSON")
+
+    response = SimpleNamespace(
+        status=status,
+        json=invalid_json,
+        text=lambda: "while(1);" + json.dumps(payload),
+    )
+    control = SimpleNamespace(click=lambda: None, fill=lambda _value: None)
+    page = SimpleNamespace(
+        goto=lambda *_args, **_kwargs: None,
+        expect_response=lambda _predicate: nullcontext(SimpleNamespace(value=response)),
+    )
+    monkeypatch.setattr(canvas_api, "_first_visible", lambda *_args: control)
+    result = canvas_api._create_token_in_ui(page, "https://myetl.snu.ac.kr", datetime.now(UTC).date())
+    assert result == (token, "77", payload["expires_at"])
+
+
+def test_rate_limit_honors_retry_after_without_retry_storm(tmp_path, monkeypatch):
+    config, token = _config_and_token(tmp_path)
+    calls=[]; waits=[]
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429,headers={'Retry-After':'3'}) if len(calls)<3 else httpx.Response(200,json={'id':42})
+    original=httpx.Client
+    monkeypatch.setattr(canvas_api.httpx,'Client',lambda **kwargs: original(transport=httpx.MockTransport(respond),**kwargs))
+    monkeypatch.setattr(canvas_api.monotonic_time,'sleep',waits.append)
+    monkeypatch.setattr(canvas_api.random,'uniform',lambda *_:0)
+    with canvas_api.CanvasClient(config,token) as client:
+        assert client.request('GET','/api/v1/users/self/profile')['id']==42
+    assert waits==[3,3] and len(calls)==3

@@ -193,3 +193,45 @@ def test_connect_revokes_new_token_if_secure_storage_fails(
     assert codex_desktop.main(["connect"]) == 1
     assert revoked == [token]
     assert token.value not in capsys.readouterr().out
+
+@pytest.mark.parametrize("creation_fails", [False, True])
+def test_connect_preserves_result_when_browser_cleanup_fails(
+    desktop_store: MemoryCredentials,
+    monkeypatch: pytest.MonkeyPatch,
+    creation_fails: bool,
+) -> None:
+    from playwright import sync_api
+
+    from snuetl.errors import DiscoveryError
+
+    token = _token()
+
+    class Browser:
+        def new_context(self, **_kwargs: object) -> object:
+            return SimpleNamespace(new_page=lambda: object())
+
+        def close(self) -> None:
+            raise RuntimeError("Connection closed while reading from the driver")
+
+    class Playwright:
+        def __enter__(self) -> object:
+            return SimpleNamespace(chromium=SimpleNamespace(launch=lambda **_kwargs: Browser()))
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def create(*_args: object, **_kwargs: object) -> tuple[str, str, str]:
+        if creation_fails:
+            raise DiscoveryError("Canvas token form is not supported")
+        return token.value, token.token_id, token.expires_at
+
+    monkeypatch.setattr(sync_api, "sync_playwright", Playwright)
+    monkeypatch.setattr(codex_desktop, "_login", lambda *_args: (token.origin, token.user_id))
+    monkeypatch.setattr(codex_desktop, "_create_token_in_ui", create)
+    monkeypatch.setattr(codex_desktop, "_profile", lambda _token: {"id": token.user_id})
+    if creation_fails:
+        with pytest.raises(DiscoveryError, match="token form"):
+            codex_desktop._browser_operation(rotate=False, disconnect=False)
+    else:
+        assert codex_desktop._browser_operation(rotate=False, disconnect=False)["connected"]
+        assert codex_desktop._load_token() == token

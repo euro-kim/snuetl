@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "snuetl"
-version = "0.7.1"
+version = "0.9.1"
 description = "Synchronize files from Seoul National University eTL"
 readme = "README.md"
 requires-python = ">=3.11"

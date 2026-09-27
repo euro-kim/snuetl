@@ -3,7 +3,10 @@
            Version="$(var.ProductVersion)"
            UpgradeCode="A6797C5E-1774-45A9-A264-B872DE246A27"
            Scope="perUser">
-    <MajorUpgrade DowngradeErrorMessage="A newer SNUETL version is already installed." />
+    <Property Id="INSTALLSIGNIN" Value="1" Secure="yes" />
+    <MajorUpgrade Schedule="afterInstallExecute" DowngradeErrorMessage="A newer SNUETL version is already installed." />
+    <Binary Id="ShutdownHelper" SourceFile="$(var.ShutdownHelper)" />
+    <CustomAction Id="StopSNUETL" BinaryRef="ShutdownHelper" ExeCommand="&quot;[BINDIR]SNUETL.exe&quot;" Return="check" />
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="LocalAppDataFolder">
@@ -22,22 +25,30 @@
     </ComponentGroup>
     <Component Id="MainExecutable" Directory="BINDIR" Guid="1202433A-FCBD-4F3D-A92B-C891ECA882C7">
       <File Id="SNUETLEXE" Source="$(var.PayloadDir)\SNUETL.exe" KeyPath="yes" />
+      <?include $(var.RemoveFoldersFile) ?>
+      <RemoveFolder Id="RemoveAppDirectory" Directory="BINDIR" On="uninstall" />
+      <RemoveFolder Id="RemoveAppRoot" Directory="APPROOT" On="uninstall" />
     </Component>
     <Component Id="StartMenuShortcut" Directory="PROGRAMMENUDIR" Guid="5AA86DF0-5193-43BC-8622-C69E05D10214">
-      <Shortcut Id="SNUETLShortcut" Name="SNUETL" Target="[#SNUETLEXE]" WorkingDirectory="BINDIR" />
+      <Shortcut Id="SNUETLShortcut" Name="SNUETL" Target="[#SNUETLEXE]" WorkingDirectory="BINDIR">
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="SNUETL.Windows" />
+        <ShortcutProperty Key="System.AppUserModel.ToastActivatorCLSID" Value="{EB87E4D3-3C8D-493C-A763-B5330FBD4329}" />
+      </Shortcut>
       <RemoveFolder Id="RemoveProgramMenuDir" On="uninstall" />
-      <RemoveRegistryValue Id="RemoveStartupValue" Root="HKCU"
+      <RegistryValue Id="StartupValue" Root="HKCU"
                            Key="Software\Microsoft\Windows\CurrentVersion\Run"
-                           Name="SNUETL" Action="removeOnUninstall" />
+                           Name="SNUETL" Type="string" Value="&quot;[#SNUETLEXE]&quot; --background" />
+      <RegistryValue Root="HKCU" Key="Software\SNUETL" Name="Executable" Type="string" Value="[#SNUETLEXE]" />
       <RegistryValue Root="HKCU" Key="Software\SNUETL" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
-    <CustomAction Id="UnregisterSyncRoot" FileRef="SNUETLEXE" ExeCommand="--unregister"
-                  Execute="deferred" Impersonate="yes" Return="ignore" />
-    <CustomAction Id="LaunchSNUETL" FileRef="SNUETLEXE" ExeCommand=""
+    <CustomAction Id="UnregisterSyncRoot" FileRef="SNUETLEXE" ExeCommand="--uninstall"
+                  Execute="deferred" Impersonate="yes" Return="check" />
+    <CustomAction Id="LaunchSNUETL" FileRef="SNUETLEXE" ExeCommand="--install-signin=[INSTALLSIGNIN]"
                   Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
-      <Custom Action="UnregisterSyncRoot" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="StopSNUETL" Before="InstallValidate" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="UnregisterSyncRoot" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="LaunchSNUETL" After="InstallFinalize" Condition="NOT Installed" />
     </InstallExecuteSequence>
 

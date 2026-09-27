@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .coverage
 dist/
 build/
@@ -18,3 +20,6 @@ docker-data/
 .snuetl/
 auth-profile/
 state.db*
+
+# Local build toolchain
+.tools/

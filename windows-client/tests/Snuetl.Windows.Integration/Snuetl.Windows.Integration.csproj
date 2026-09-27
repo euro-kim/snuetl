@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0-windows10.0.17763.0</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><RuntimeIdentifier>win-x64</RuntimeIdentifier></PropertyGroup><ItemGroup><ProjectReference Include="../../src/Snuetl.Windows.App/Snuetl.Windows.App.csproj"/></ItemGroup></Project>

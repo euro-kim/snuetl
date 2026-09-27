@@ -13,8 +13,11 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../../src/Snuetl.Windows.App/GitHubReleases.cs" Link="GitHubReleases.cs" />
     <Compile Include="../../src/Snuetl.Windows.App/Models.cs" Link="Models.cs" />
     <Compile Include="../../src/Snuetl.Windows.App/ManifestReconciler.cs" Link="ManifestReconciler.cs" />
     <Compile Include="../../src/Snuetl.Windows.App/CloudFilesNative.cs" Link="CloudFilesNative.cs" />
+    <Compile Include="../../src/Snuetl.Windows.App/CleanupPaths.cs" Link="CleanupPaths.cs" />
+    <Compile Include="../../src/Snuetl.Windows.App/ActivityStore.cs" Link="ActivityStore.cs" />
   </ItemGroup>
 </Project>

@@ -3,8 +3,10 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly SETUP_SCRIPT="${SCRIPT_DIR}/docker-setup.sh"
+readonly ASSET_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Keep existing .env, bind mounts, and Compose project identity rooted in the checkout.
+readonly SCRIPT_DIR="$(cd -- "$ASSET_DIR/.." && pwd -P)"
+readonly SETUP_SCRIPT="${ASSET_DIR}/docker-setup.sh"
 readonly REMOTE_NAME=origin
 readonly DEPLOY_BRANCH=main
 
@@ -24,7 +26,7 @@ die() {
 
 usage() {
     cat <<'EOF'
-Usage: ./docker-update.sh [--yes] [--force-rebuild] [--env-file PATH]
+Usage: bash docker/docker-update.sh [--yes] [--force-rebuild] [--env-file PATH]
                           [--project-name NAME]
 
 Fetch origin/main, show and fast-forward to reviewed upstream commits, then use
@@ -76,9 +78,9 @@ fi
 ((EUID != 0)) || die "run this script as your normal login user, not with sudo"
 command -v git >/dev/null 2>&1 || die "Git is required to update the source checkout"
 command -v docker >/dev/null 2>&1 || die "Docker Engine is required to rebuild the deployment"
-[[ -x "$SETUP_SCRIPT" ]] || die "docker-setup.sh is missing or not executable"
+[[ -f "$SETUP_SCRIPT" ]] || die "docker-setup.sh is missing"
 [[ -f "$ENV_FILE" ]] || \
-    die "environment file not found: ${ENV_FILE}; run ./docker-setup.sh for first deployment"
+    die "environment file not found: ${ENV_FILE}; run bash docker/docker-setup.sh for first deployment"
 
 log "[1/6] Validating the deployment checkout and local configuration."
 repository_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)" || \
@@ -165,7 +167,7 @@ compose() {
         -u SNUETL_TIMEZONE -u SNUETL_CONFIG_DIR -u SNUETL_STATE_DIR \
         -u SNUETL_DOWNLOAD_DIR -u SNUETL_VIDEO_DIR \
         "${DOCKER_COMMAND[@]}" compose --env-file "$ENV_FILE" \
-        --project-directory "$SCRIPT_DIR" -f "$SCRIPT_DIR/compose.yaml" \
+        --project-directory "$SCRIPT_DIR" -f "$ASSET_DIR/compose.yaml" \
         "${project_arguments[@]}" "$@"
 }
 
@@ -224,8 +226,8 @@ else
     log "[4/6] Keeping the current source revision for the forced rebuild."
 fi
 
-[[ -x "$SETUP_SCRIPT" ]] || \
-    die "the updated revision does not contain an executable docker-setup.sh"
+[[ -f "$SETUP_SCRIPT" ]] || \
+    die "the updated revision does not contain docker/docker-setup.sh"
 declare -a setup_arguments=(--yes --env-file "$ENV_FILE")
 if [[ -n "$PROJECT_NAME" ]]; then
     setup_arguments+=(--project-name "$PROJECT_NAME")
@@ -260,7 +262,7 @@ restore_previous_image() {
     die "${reason}; no prior image was available for rollback"
 }
 
-if ! "$SETUP_SCRIPT" "${setup_arguments[@]}"; then
+if ! bash "$SETUP_SCRIPT" "${setup_arguments[@]}"; then
     restore_previous_image "update failed at ${remote_revision}"
 fi
 

@@ -4,6 +4,7 @@ services:
     image: ${SNUETL_IMAGE:-snuetl:local}
     build:
       context: .
+      dockerfile: docker/Dockerfile
       args:
         SNUETL_UID: ${SNUETL_UID:-1000}
         SNUETL_GID: ${SNUETL_GID:-1000}
@@ -46,7 +47,7 @@ services:
       - /run:size=16m,mode=1777
     security_opt:
       - no-new-privileges:true
-      - seccomp=./deployment/docker/seccomp_profile.json
+      - seccomp=./docker/seccomp_profile.json
     healthcheck:
       test: ["CMD", "python", "-m", "snuetl.container_runtime", "--healthcheck"]
       interval: 15s

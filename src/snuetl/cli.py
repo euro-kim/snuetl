@@ -1107,7 +1107,7 @@ def main(argv: list[str] | None = None) -> int:
             if is_container_runtime():
                 raise UpdateError(
                     "a running container cannot replace its read-only image. On the Docker host, "
-                    "run './docker-update.sh'; it rebuilds and recreates the container while "
+                    "run 'bash docker/docker-update.sh'; it rebuilds and recreates the container while "
                     "preserving configuration, browser state, and downloads."
                 )
             if args.no_input:

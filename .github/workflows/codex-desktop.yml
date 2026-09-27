@@ -2,12 +2,9 @@ name: Build Codex desktop helpers
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   macos:
@@ -22,13 +19,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build Mac helper and installer
-        run: bash packaging/macos/build.sh
+        run: bash macos-client/build.sh
       - name: Check packaged helper
-        run: dist/snuetl-codex/snuetl-codex status
+        run: macos-client/dist/snuetl-codex/snuetl-codex status
       - uses: actions/upload-artifact@v4
         with:
           name: snuetl-codex-${{ matrix.runner }}
-          path: dist/snuetl-codex-macos-*.dmg
+          path: macos-client/dist/snuetl-codex-macos-*.dmg
 
   windows:
     runs-on: windows-2025
@@ -39,32 +36,11 @@ jobs:
           python-version: '3.12'
       - name: Build Windows helper and installer
         shell: pwsh
-        run: packaging/windows/build.ps1
+        run: windows-client/codex-helper/build.ps1
       - name: Check packaged helper
         shell: pwsh
-        run: .\dist\snuetl-codex\snuetl-codex.exe status
+        run: .\windows-client\codex-helper\dist\snuetl-codex\snuetl-codex.exe status
       - uses: actions/upload-artifact@v4
         with:
           name: snuetl-codex-windows-x64
-          path: dist/snuetl-codex-windows-x64.msi
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, windows]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: snuetl-codex-*
-          merge-multiple: true
-          path: release
-      - name: Produce release checksums
-        shell: bash
-        run: |
-          cd release
-          sha256sum snuetl-codex-macos-arm64.dmg snuetl-codex-macos-x86_64.dmg snuetl-codex-windows-x64.msi > SHA256SUMS.txt
-      - name: Publish pilot release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: gh release create "${GITHUB_REF_NAME}" release/* --prerelease --title "SNUETL Codex ${GITHUB_REF_NAME}"
+          path: windows-client/codex-helper/dist/snuetl-codex-windows-x64.msi

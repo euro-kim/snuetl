@@ -325,7 +325,7 @@ def doctor_embed(data: dict[str, object]) -> discord.Embed:
         "discord_configuration": "Run `snuetl discord` on the host.",
         "discord_service": "Run `snuetl discord status`, then enable or restart the service.",
         "user_linger": "Run the linger command reported by `snuetl discord status`.",
-        "container_restart_policy": "Recreate the container with `./docker-update.sh --force-rebuild`.",
+        "container_restart_policy": "Recreate the container with `bash docker/docker-update.sh --force-rebuild`.",
     }
     embed = discord.Embed(
         title="Diagnostics passed" if not required_failed else "Diagnostics found issues",
