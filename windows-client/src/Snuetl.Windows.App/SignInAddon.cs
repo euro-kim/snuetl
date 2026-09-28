@@ -32,6 +32,9 @@ internal static class SignInAddon
                 using var github = new GitHubReleases(settings.ReleaseRepository,token:GitHubCredential.Read());
                 var asset = await github.FindAsync(true) ?? throw new IOException("No SNUETL sign-in ZIP was found in GitHub releases. Manual-token setup is still available.");
                 descriptor = new(asset.Version,asset.Url,asset.Sha256,asset.Size,0);
+                var installedHash = Path.Combine(target,"component-sha256.txt");
+                if (File.Exists(Path.Combine(target,"snuetl-signin.exe")) && File.Exists(installedHash)
+                    && (await File.ReadAllTextAsync(installedHash)).Trim().Equals(asset.Sha256,StringComparison.OrdinalIgnoreCase)) return;
                 await github.DownloadAsync(asset,download);
                 archive = download;
             }
@@ -44,13 +47,14 @@ internal static class SignInAddon
             }
             await Task.Run(() => ZipFile.ExtractToDirectory(archive,stage));
             if (!File.Exists(Path.Combine(stage,"snuetl-signin.exe"))) throw new IOException("The downloaded component is incomplete.");
+            await File.WriteAllTextAsync(Path.Combine(stage,"component-version.txt"),descriptor.Version);
+            await File.WriteAllTextAsync(Path.Combine(stage,"component-sha256.txt"),descriptor.Sha256);
             var old = target + ".old";
             DeleteOwned(old,parent);
             if (Directory.Exists(target)) Directory.Move(target,old);
             try { Directory.Move(stage,target); }
             catch { if (Directory.Exists(old)) Directory.Move(old,target); throw; }
             DeleteOwned(old,parent);
-            await File.WriteAllTextAsync(Path.Combine(target,"component-version.txt"),descriptor.Version);
         }
         finally { DeleteOwned(stage,parent); if (File.Exists(download)) File.Delete(download); Gate.Release(); }
     }

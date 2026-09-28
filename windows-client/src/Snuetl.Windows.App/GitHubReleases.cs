@@ -28,7 +28,7 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
             request.Headers.Accept.ParseAdd(binary ? "application/octet-stream" : "application/vnd.github+json");
             request.Headers.Add("X-GitHub-Api-Version","2022-11-28");
         }
-        request.Headers.UserAgent.ParseAdd("SNUETL-Windows/0.9.1");
+        request.Headers.UserAgent.ParseAdd("SNUETL-Windows/0.9.2");
         var response = await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         { response.Dispose(); throw new IOException($"GitHub releases for {Repository} are unavailable. For a private repository, save a GitHub token with Contents: read access in Settings."); }
@@ -43,7 +43,7 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(45)); ct = timeout.Token;
-        ReleaseDownload? latest = null;
+        var candidates = new List<(Version Version, JsonElement Asset, JsonElement[] Assets)>();
         // Search older releases too: core-only releases must not hide a reusable ZIP.
         for (var page = 1; page <= 20; page++)
         {
@@ -52,7 +52,7 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
             var releases = json.RootElement.EnumerateArray().ToArray();
             foreach (var release in releases)
             {
-                if (release.GetProperty("draft").GetBoolean() || (!addon && release.GetProperty("prerelease").GetBoolean())) continue;
+                if (release.GetProperty("draft").GetBoolean() || release.GetProperty("prerelease").GetBoolean()) continue;
                 var tag = release.GetProperty("tag_name").GetString() ?? "";
                 var version = ParseVersion(tag);
                 var assets = release.GetProperty("assets").EnumerateArray().ToArray();
@@ -60,27 +60,30 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
                 foreach (var asset in matches)
                 {
                     var name = asset.GetProperty("name").GetString()!;
-                    var foundVersion = addon ? ParseVersion(name) ?? version : version ?? ParseVersion(name);
+                    var foundVersion = ParseVersion(name) ?? version;
                     if (foundVersion is null) continue;
-                    if (!addon && latest is not null && ParseVersion(latest.Version) >= foundVersion) continue;
-                    var url = asset.GetProperty("browser_download_url").GetString() ?? "";
-                    if (!OwnedUrl(url)) throw new IOException("The release asset does not belong to the configured GitHub repository.");
-                    var digest = asset.TryGetProperty("digest",out var d) ? d.GetString() : null;
-                    var hash = digest?.StartsWith("sha256:",StringComparison.OrdinalIgnoreCase) == true ? digest[7..] : await ReadChecksumAsync(assets,name,ct);
-                    if (hash is null || !Regex.IsMatch(hash,@"\A[0-9a-fA-F]{64}\z")) throw new IOException($"The release is missing a SHA-256 digest for {name}. Upload SHA256SUMS.txt or an asset with a GitHub digest.");
-                    var download = new ReleaseDownload(foundVersion.ToString(3),name,url,asset.GetProperty("size").GetInt64(),hash, asset.TryGetProperty("url",out var api) ? api.GetString() : null);
-                    if (addon) return download; // GitHub lists published releases newest first, independently of core version.
-                    latest = download;
+                    candidates.Add((foundVersion, asset.Clone(), assets.Select(a => a.Clone()).ToArray()));
                 }
             }
             if (releases.Length < 100) break;
         }
-        return latest;
+        // GitHub's release order is not a semantic version order. Validate only
+        // the selected asset so a historical release without hashes cannot block it.
+        if (candidates.Count == 0) return null;
+        var selected = candidates.OrderByDescending(c => c.Version).First();
+        var chosen = selected.Asset;
+        var chosenName = chosen.GetProperty("name").GetString()!;
+        var url = chosen.GetProperty("browser_download_url").GetString() ?? "";
+        if (!OwnedUrl(url)) throw new IOException("The release asset does not belong to the configured GitHub repository.");
+        var digest = chosen.TryGetProperty("digest",out var d) ? d.GetString() : null;
+        var hash = digest?.StartsWith("sha256:",StringComparison.OrdinalIgnoreCase) == true ? digest[7..] : await ReadChecksumAsync(selected.Assets,chosenName,ct);
+        if (hash is null || !Regex.IsMatch(hash,@"\A[0-9a-fA-F]{64}\z")) throw new IOException($"The release is missing a SHA-256 digest for {chosenName}. Upload SHA256SUMS.txt or an asset with a GitHub digest.");
+        return new(selected.Version.ToString(3),chosenName,url,chosen.GetProperty("size").GetInt64(),hash, chosen.TryGetProperty("url",out var api) ? api.GetString() : null);
     }
     private bool OwnedApi(string? url) => url is not null && Uri.TryCreate(url,UriKind.Absolute,out var uri) && uri.Scheme == "https" && uri.Host == "api.github.com" && uri.AbsolutePath.StartsWith($"/repos/{Repository}/releases/assets/",StringComparison.OrdinalIgnoreCase);
     public static bool IsAsset(string name, bool addon) => addon
         ? Regex.IsMatch(name,@"\ASNUETL-SignIn-\d+\.\d+\.\d+-win-x64\.zip\z",RegexOptions.IgnoreCase)
-        : name.StartsWith("SNUETLSetup",StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe",StringComparison.OrdinalIgnoreCase);
+        : Regex.IsMatch(name,@"\ASNUETLSetup(?:-\d+\.\d+\.\d+)?\.exe\z",RegexOptions.IgnoreCase);
     private async Task<string?> ReadChecksumAsync(JsonElement[] assets,string name,CancellationToken ct)
     {
         var checksum = assets.FirstOrDefault(a => a.GetProperty("name").GetString() == "SHA256SUMS.txt");

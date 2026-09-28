@@ -63,6 +63,33 @@ public class GitHubReleaseTests
             Assert.False(File.Exists(file+".partial"));
         } finally { if(Directory.Exists(dir)) Directory.Delete(dir,true); }
     }
+    [Fact]
+    public async Task AddOnUsesHighestStableVersionRegardlessOfReleaseOrder()
+    {
+        using var client = new HttpClient(new Handler(_ => Json(new[] {
+            Release("v0.8.0", [Asset("SNUETL-SignIn-0.8.0-win-x64.zip")]),
+            Release("v2.0.0", [Asset("SNUETL-SignIn-2.0.0-win-x64.zip")], prerelease:true),
+            Release("v0.9.1", [Asset("SNUETLSetup-0.9.1.exe")]),
+            Release("v0.9.0", [Asset("SNUETL-SignIn-0.9.0-win-x64.zip")])
+        })));
+        using var api = new GitHubReleases(Repo,client);
+        Assert.Equal("0.9.0",(await api.FindAsync(true))!.Version);
+    }
+    [Fact]
+    public async Task HistoricalMissingDigestDoesNotBlockNewInstaller()
+    {
+        using var client = new HttpClient(new Handler(_ => Json(new[] {
+            Release("v0.8.0", [Asset("SNUETLSetup-0.8.0.exe", hash:"")]),
+            Release("v0.9.1", [Asset("SNUETLSetup-0.9.1.exe")])
+        })));
+        using var api = new GitHubReleases(Repo,client);
+        Assert.Equal("0.9.1",(await api.FindAsync(false))!.Version);
+    }
+    [Theory]
+    [InlineData("SNUETLSetup-arm64.exe")]
+    [InlineData("SNUETLSetup-0.9.2-beta.exe")]
+    [InlineData("SNUETLSetup-uninstall.exe")]
+    public void UnrelatedInstallersAreIgnored(string name) => Assert.False(GitHubReleases.IsAsset(name,false));
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

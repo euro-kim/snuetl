@@ -144,7 +144,9 @@ The core worker imports `windows_auth.py`, which reads the same Credential Manag
 
 `build.ps1` builds and tests the self-contained core, then packages the MSI/bootstrapper. Add `-BuildSignInAddon` only when you need to rebuild the optional Playwright/Chromium ZIP. Core-only releases can reuse an older ZIP; the online installer searches releases independently for the newest available sign-in component. The bundled manifest retains the known 0.9.0 ZIP for offline installation. Do not replace an existing ZIP with different bytes under the same checksum.
 
-The installer checks **Auto configure API** by default. It downloads the optional component after core installation; a failed download leaves the core usable. An installed add-on is retained during upgrades. Settings, including uninstall and updates, live inside the dashboard.
+The installer checks **Use automatic login** by default. It finds the highest stable sign-in component across GitHub releases after core installation, including during upgrades. A matching installed checksum avoids another download, and a failed download retains the existing component. The automatic-login button also downloads the component when missing. Settings, including uninstall and updates, live inside the dashboard.
+
+For manual login, paste the complete Canvas token including its issued numeric prefix and `~`, such as `1~` followed by the long secret. Do not invent or append characters. SNUETL adds `Bearer` to API requests automatically and also accepts a copied `Bearer` or `Authorization: Bearer` header. This Canvas token is separate from an optional GitHub release-access token.
 
 ### Private GitHub testing and updates
 

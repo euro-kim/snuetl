@@ -35,6 +35,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     public void Render(ClientStatus status)
     {
+        ComponentStatus.Text = SignInAddon.Installed ? "Installed — ready for automatic login" : status.State == "Downloading automatic login…" ? status.State : "Not installed — manual-token setup remains available";
         AccountText.Text = status.Account; RootText.Text = status.Root;
         var connected = status.Account.StartsWith("Connected", StringComparison.Ordinal);
         SignInPanel.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
@@ -115,7 +116,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     private async void InstallAddon_Click(object sender, RoutedEventArgs e)
     {
         if (DownloadConsent.IsChecked != true) { FeedbackText.Text = "Select the optional download checkbox first."; return; }
-        await RunAsync(() => SignInAddon.InstallAsync(), "Downloading and verifying automatic sign-in…", "Automatic sign-in installed.");
+        await RunAsync(controller.InstallSignInAsync, "Downloading and verifying automatic sign-in…", "Automatic sign-in installed.");
         ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed — manual-token setup remains available";
     }
     private async void LocalAddon_Click(object sender, RoutedEventArgs e)

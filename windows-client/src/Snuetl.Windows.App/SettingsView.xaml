@@ -54,9 +54,10 @@
                                 <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <StackPanel x:Name="SignInPanel">
                                     <TextBlock Text="Use a Canvas API token, or choose the optional automatic sign-in download below. A browser opens only when you request automatic sign-in." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
-                                    <Button Content="Sign in to SNU eTL" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
+                                    <Button Content="Use automatic login (downloads component if needed)" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
                                     <Expander IsExpanded="True" Header="Use a Canvas API token" Margin="0,16,0,0">
                                         <StackPanel Margin="0,12,0,0">
+                                            <TextBlock Text="Paste the complete token from Canvas Account Settings. It looks like 1~ followed by a long string of letters, numbers, underscores or hyphens. Keep the number and ~ exactly as shown. Do not add a prefix or suffix; SNUETL adds Bearer automatically." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,10"/>
                                             <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="Canvas API token"/>
                                             <WrapPanel Margin="0,12,0,0">
                                                 <Button Content="Save token" Click="ManualConnect_Click"/>
@@ -165,7 +166,7 @@
                             <TextBlock x:Name="VersionText" Foreground="{StaticResource BrandBrush}" FontSize="20" Margin="0,0,0,12"/>
                             <TextBlock Text="SNUETL checks your GitHub releases every week. Download the latest Windows installer here; your account, icon, activity and synced folder are kept." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,18"/>
                             <Expander Header="Private GitHub release access" Margin="0,0,0,16"><StackPanel Margin="0,12,0,0">
-                                <TextBlock Text="For this private repository, use a fine-grained GitHub token with Contents: read permission for euro-kim/snuetl. Stored in Windows Credential Manager; never included in settings or logs." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,10"/>
+                                <TextBlock Text="Public releases need no GitHub token. For private releases, use a fine-grained GitHub token with Contents: read permission for euro-kim/snuetl. This is separate from your Canvas token and is stored in Windows Credential Manager." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,10"/>
                                 <PasswordBox x:Name="GitHubTokenBox" Padding="10" AutomationProperties.Name="GitHub release access token"/>
                                 <WrapPanel Margin="0,10,0,0"><Button Content="Save release access" Click="SaveGitHub_Click"/><Button Content="Remove release access" Click="RemoveGitHub_Click"/></WrapPanel>
                                 <TextBlock x:Name="GitHubAccessStatus" Margin="0,10,0,0" TextWrapping="Wrap"/>

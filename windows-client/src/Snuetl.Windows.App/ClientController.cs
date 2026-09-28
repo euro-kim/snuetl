@@ -71,8 +71,11 @@ public sealed class ClientController : IAsyncDisposable
         Publish("Signing in…");
         try
         {
+            if (!SignInAddon.Installed) await InstallSignInAsync();
+            Publish("Complete sign-in in the browser…");
             await backend.InvokeAsync<JsonElement>("auth.auto");
             account = await backend.InvokeAsync<AccountStatus>("auth.status", new { verify = true });
+            if (!account.Ready) throw new BackendException("NOT_CONNECTED", "Canvas access could not be verified. Reconnect your account.");
             await EnsureProviderAsync();
             await RefreshAsync();
         }
@@ -94,6 +97,13 @@ public sealed class ClientController : IAsyncDisposable
         }
     }
 
+    public async Task InstallSignInAsync()
+    {
+        Publish("Downloading automatic login…");
+        try { await SignInAddon.InstallAsync(); }
+        finally { Publish(); }
+    }
+
     public async Task ConnectManualAsync(string token)
     {
         error = null;
@@ -104,6 +114,7 @@ public sealed class ClientController : IAsyncDisposable
                 "auth.manual",
                 new { token, origin = "https://myetl.snu.ac.kr" });
             account = await backend.InvokeAsync<AccountStatus>("auth.status", new { verify = true });
+            if (!account.Ready) throw new BackendException("NOT_CONNECTED", "Canvas access could not be verified. Check your API token.");
             await EnsureProviderAsync();
             await RefreshAsync();
         }

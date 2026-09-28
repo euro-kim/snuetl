@@ -20,11 +20,15 @@ jobs:
       - name: Build and test
         shell: pwsh
         run: windows-client/build.ps1
+      - name: Verify compatibility with published sign-in component
+        shell: pwsh
+        run: dotnet run --project windows-client/tests/Snuetl.Windows.Integration -c Release --no-build -- --release-smoke
       - uses: actions/upload-artifact@v4
         with:
           name: snuetl-windows-x64
           path: |
             windows-client/dist/SNUETLSetup.exe
+            windows-client/dist/SNUETLSetup-*.exe
             windows-client/dist/SNUETL.msi
             windows-client/dist/SNUETL-SignIn-*.zip
             windows-client/dist/*.json

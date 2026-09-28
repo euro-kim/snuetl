@@ -1,5 +1,12 @@
 # Windows client releases
 
+## 0.9.2
+
+- Select the highest stable Windows installer and browser add-on independently, including older release pages; historical missing checksums no longer block a newer release.
+- Keep Use automatic login enabled in setup, fetch the latest stable add-on on install/upgrade, and download it on demand from the login button.
+- Reuse the published 0.9.0 browser ZIP and its credential format; isolate its frozen runtime and verify saved credentials before reporting success.
+- Explain complete Canvas tokens (`1~…`), preserve the issued prefix, and accept pasted Bearer headers without adding a duplicate prefix.
+
 ## 0.9.1
 
 - Embedded dashboard Settings with explicit Windows uninstall action.

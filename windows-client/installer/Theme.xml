@@ -24,7 +24,7 @@
             <Label X="11" Y="80" Width="-11" Height="30" FontId="2" DisablePrefix="yes" Visible="no" Name="CheckingForUpdatesLabel" />
         </Page>
         <Page Name="Install">
-            <Checkbox Name="InstallSignIn" X="11" Y="186" Width="-11" Height="22" TabStop="yes" FontId="3">Auto configure API (download automatic sign-in from GitHub)</Checkbox>
+            <Checkbox Name="InstallSignIn" X="11" Y="186" Width="-11" Height="22" TabStop="yes" FontId="3">Use automatic login (download from GitHub)</Checkbox>
             <Label X="11" Y="214" Width="-11" Height="32" FontId="3">Latest available sign-in ZIP from GitHub. [SignInSizes] typical.</Label>
             <Hypertext Name="EulaHyperlink" X="11" Y="121" Width="-11" Height="51" TabStop="yes" FontId="3" HideWhenDisabled="yes">#(loc.InstallLicenseLinkText)</Hypertext>
             <Checkbox Name="EulaAcceptCheckbox" X="-11" Y="-41" Width="260" Height="17" TabStop="yes" FontId="3" HideWhenDisabled="yes">#(loc.InstallAcceptCheckbox)</Checkbox>

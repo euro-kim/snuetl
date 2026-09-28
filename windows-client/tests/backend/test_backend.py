@@ -112,3 +112,58 @@ def test_known_remote_size_does_not_make_an_extra_request(monkeypatch: pytest.Mo
     remote = RemoteFile("1", "2", "notes.pdf", (), "https://myetl.snu.ac.kr/file", size=42)
     token = CanvasToken("1~secret_example_token_123456789", "https://myetl.snu.ac.kr", "7", "8", "2099-01-01T00:00:00+00:00")
     assert backend._remote_size(remote, token) == 42
+
+
+@pytest.mark.parametrize("prefix", ["", "Bearer ", "Authorization: Bearer "])
+def test_manual_token_header_is_normalized(monkeypatch, prefix):
+    saved = []
+    value = "1~secret_example_token_123456789"
+    def get(url, **kwargs):
+        assert kwargs["headers"]["Authorization"] == f"Bearer {value}"
+        return backend.httpx.Response(200, json={"id": 42})
+    monkeypatch.setattr(backend.httpx, "get", get)
+    monkeypatch.setattr(backend, "_prepare_desktop_helper", lambda: None)
+    monkeypatch.setattr(backend.codex_desktop, "_save_token", saved.append)
+    backend.auth_manual(f"  {prefix}{value}\n")
+    assert saved[0].value == value
+
+
+def test_manual_token_missing_prefix_is_not_guessed(monkeypatch):
+    monkeypatch.setattr(backend.httpx, "get", lambda *a, **k: pytest.fail("must validate before HTTP"))
+    with pytest.raises(backend.BackendError, match="complete Canvas token"):
+        backend.auth_manual("secret_example_token_123456789")
+
+
+@pytest.mark.parametrize("status", [{"ready": False}, {"ready": True, "valid": False}, {"ready": True, "valid": True}])
+def test_auto_login_uses_independent_bundle_and_requires_valid_saved_token(tmp_path, monkeypatch, status):
+    monkeypatch.setenv("SNUETL_WINDOWS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "wrong-browser-path")
+    executable = backend.addon_executable()
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    def run(args, **kwargs):
+        assert args == [str(executable)]
+        assert kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+        assert kwargs["env"]["PLAYWRIGHT_BROWSERS_PATH"] == "0"
+        assert kwargs["env"]["SNUETL_WINDOWS_DATA_DIR"] == str(tmp_path)
+        return backend.subprocess.CompletedProcess(args, 0)
+    monkeypatch.setattr(backend.subprocess, "run", run)
+    monkeypatch.setattr(backend, "auth_status", lambda **kw: status)
+    if status.get("valid"):
+        assert backend.auth_auto() == status
+    else:
+        with pytest.raises(backend.BackendError, match="valid saved Canvas token"):
+            backend.auth_auto()
+
+
+def test_auto_login_timeout_has_actionable_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("SNUETL_WINDOWS_DATA_DIR", str(tmp_path))
+    executable = backend.addon_executable()
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    def run(*args, **kwargs):
+        raise backend.subprocess.TimeoutExpired("signin", 660)
+    monkeypatch.setattr(backend.subprocess, "run", run)
+    with pytest.raises(backend.BackendError, match="timed out") as error:
+        backend.auth_auto()
+    assert error.value.code == "SIGNIN_TIMEOUT"

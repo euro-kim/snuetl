@@ -132,11 +132,22 @@ def auth_auto() -> dict[str, Any]:
     executable = addon_executable()
     if not executable.is_file():
         raise BackendError("OPTIONAL_COMPONENT_MISSING", "Install Automatic sign-in in Settings, or paste a Canvas API token.")
-    result = subprocess.run([str(executable)], capture_output=True, text=True, encoding="utf-8",
-                            timeout=660, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    # The add-on is an independently frozen program, not a worker of this bundle.
+    env = os.environ.copy()
+    env.update(PYINSTALLER_RESET_ENVIRONMENT="1", PLAYWRIGHT_BROWSERS_PATH="0",
+               SNUETL_WINDOWS_DATA_DIR=str(data_dir()))
+    try:
+        result = subprocess.run([str(executable)], capture_output=True, text=True, encoding="utf-8",
+                                env=env, timeout=660,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired as exc:
+        raise BackendError("SIGNIN_TIMEOUT", "Sign-in timed out. Close the sign-in browser and try again.") from exc
     if result.returncode:
         raise BackendError("SIGNIN_FAILED", "Automatic sign-in did not complete. Try again or use a manual token.")
-    return auth_status(verify=True)
+    status = auth_status(verify=True)
+    if not status.get("ready") or status.get("valid") is not True:
+        raise BackendError("SIGNIN_FAILED", "Sign-in finished without a valid saved Canvas token. Try again or paste a manual token.")
+    return status
 
 
 def _validate_origin(origin: str) -> str:
@@ -148,8 +159,10 @@ def _validate_origin(origin: str) -> str:
 
 def auth_manual(value: str, origin: str = "https://myetl.snu.ac.kr") -> dict[str, Any]:
     token_value = value.strip()
+    # Accept a copied HTTP header without storing or sending a duplicate prefix.
+    token_value = re.sub(r"^(?:Authorization:\s*)?Bearer\s+", "", token_value, flags=re.IGNORECASE).strip()
     if not TOKEN_PATTERN.fullmatch(token_value):
-        raise BackendError("INVALID_TOKEN", "The Canvas API token format is invalid")
+        raise BackendError("INVALID_TOKEN", "Paste the complete Canvas token, such as 1~ followed by its long secret. Keep the numeric prefix and ~ exactly as issued; do not invent or append characters. Bearer is added automatically.")
     preferred = _validate_origin(origin)
     origins = [
         preferred,

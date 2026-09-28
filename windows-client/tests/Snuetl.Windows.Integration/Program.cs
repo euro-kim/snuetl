@@ -24,6 +24,34 @@ internal static class Program
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static async Task RunAsync(string[] args)
     {
+        if (args.Contains("--release-smoke"))
+        {
+            var releaseRoot = Path.Combine(Path.GetTempPath(), "snuetl-release-smoke-" + Guid.NewGuid());
+            try
+            {
+                using var github = new GitHubReleases(GitHubReleases.DefaultRepository);
+                var core = await github.FindAsync(false);
+                var addon = await github.FindAsync(true);
+                Check(core is not null && addon is not null, "Published Windows release assets not found");
+                Console.WriteLine($"Live release discovery: installer {core!.Version}, sign-in {addon!.Version}");
+                await SignInAddon.InstallAsync(dataDirectory:releaseRoot);
+                Check(File.ReadAllText(Path.Combine(releaseRoot,"addons","signin","component-sha256.txt")) == addon.Sha256, "Installed add-on digest mismatch");
+                var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(releaseRoot,"addons","signin","snuetl-signin.exe"), "--self-test")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                start.Environment["SNUETL_WINDOWS_DATA_DIR"] = releaseRoot;
+                start.Environment["PLAYWRIGHT_BROWSERS_PATH"] = "0";
+                start.Environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1";
+                using var process = System.Diagnostics.Process.Start(start)!;
+                var stdout = process.StandardOutput.ReadToEndAsync();
+                var stderr = process.StandardError.ReadToEndAsync();
+                try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2)); }
+                catch { process.Kill(entireProcessTree:true); throw; }
+                Check(process.ExitCode == 0, "Published browser self-test failed: " + await stderr);
+                Console.WriteLine("PASS: published add-on downloaded, verified, installed and launched: " + await stdout);
+            }
+            finally { if (Directory.Exists(releaseRoot)) Directory.Delete(releaseRoot,true); }
+            return;
+        }
         using (var manager = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager"))
             foreach (var oldId in manager!.GetSubKeyNames().Where(k => k.StartsWith("SNUETL.Test!", StringComparison.Ordinal)))
                 ExplorerSyncRoot.RemoveNavigationEntry(oldId);
