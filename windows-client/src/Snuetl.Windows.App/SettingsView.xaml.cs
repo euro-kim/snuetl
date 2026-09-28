@@ -31,11 +31,13 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed — core client ready";
         RefreshGitHubAccess();
         Render(controller.Status); UpdateIcon();
-
+        Loaded += (_, _) => { controller.LoginProgressChanged += LoginProgressChanged; RenderLoginProgress(); };
+        Unloaded += (_, _) => controller.LoginProgressChanged -= LoginProgressChanged;
+        SettingsTabs.SelectionChanged += (_, _) => Dispatcher.BeginInvoke(new Action(RenderLoginProgress));
     }
     public void Render(ClientStatus status)
     {
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed — ready for automatic login" : status.State == "Downloading automatic login…" ? status.State : "Not installed — manual-token setup remains available";
+        ComponentStatus.Text = SignInAddon.Installed ? "Installed — ready for automatic login" : "Not installed — manual-token setup remains available";
         AccountText.Text = status.Account; RootText.Text = status.Root;
         var connected = status.Account.StartsWith("Connected", StringComparison.Ordinal);
         SignInPanel.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
@@ -43,7 +45,35 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         if (status.Error is not null) FeedbackText.Text = status.Error;
         UpdateStatusText.Text = controller.UpdateStatus;
         InstallUpdateButton.IsEnabled = controller.Settings.AvailableUpdate is not null;
+        RenderLoginProgress();
     }
+    private void LoginProgressChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(RenderLoginProgress));
+    internal void RenderLoginProgress()
+    {
+        var progress = controller.AutomaticLoginProgress;
+        LoginPanel.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
+        if (progress is not null)
+        {
+            LoginProgressText.Text = progress.Message;
+            LoginProgressBar.IsIndeterminate = controller.IsSigningIn && progress.Fraction is null;
+            LoginProgressBar.Value = (progress.Fraction ?? 0) * 100;
+            LoginProgressBar.Visibility = controller.IsSigningIn ? Visibility.Visible : Visibility.Collapsed;
+            CancelLoginButton.Visibility = controller.IsSigningIn ? Visibility.Visible : Visibility.Collapsed;
+            if (controller.IsSigningIn) ComponentStatus.Text = progress.Message;
+        }
+        SetActionButtons(SettingsTabs,!busy && !controller.IsSigningIn);
+        InstallUpdateButton.IsEnabled = !busy && !controller.IsSigningIn && controller.Settings.AvailableUpdate is not null;
+    }
+    private static void SetActionButtons(DependencyObject parent, bool enabled)
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent,i);
+            if (child is System.Windows.Controls.Button button) button.IsEnabled = enabled;
+            else SetActionButtons(child,enabled);
+        }
+    }
+    private void CancelLogin_Click(object sender, RoutedEventArgs e) => controller.CancelAutomaticLogin();
     internal void UpdateIcon()
     {
         if (!File.Exists(Branding.IconPath)) return;
@@ -54,12 +84,13 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     private async Task RunAsync(Func<Task> operation, string progress, string success)
     {
-        if (busy) return; busy = true; IsEnabled = false; FeedbackText.Text = progress;
+        if (busy || controller.IsSigningIn) return; busy = true; FeedbackText.Text = progress; RenderLoginProgress();
         try { await operation(); FeedbackText.Text = success; UpdateIcon(); }
+        catch (OperationCanceledException) { FeedbackText.Text = "Cancelled. You can retry when ready."; }
         catch (Exception e) { FeedbackText.Text = e.Message; }
-        finally { IsEnabled = true; busy = false; }
+        finally { busy = false; Render(controller.Status); }
     }
-    private async void Connect_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.ConnectAutomaticallyAsync, "Complete sign-in in the browser…", "Connected. Your course files are ready in Explorer.");
+    private async void Connect_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.ConnectAutomaticallyAsync, "Preparing automatic login…", "Connected. Your courses are syncing in the background.");
     private async void ManualConnect_Click(object sender, RoutedEventArgs e)
     { var token = TokenBox.Password; TokenBox.Clear(); await RunAsync(() => controller.ConnectManualAsync(token), "Checking your token…", "Account connected."); }
     private async void SignOut_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.DisconnectAsync, "Signing out…", "Signed out.");
@@ -79,7 +110,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     internal bool SavePreferences()
     {
-        if (busy) { FeedbackText.Text = "Please wait for the current operation to finish."; return false; }
+        if (busy && !controller.IsSigningIn) { FeedbackText.Text = "Please wait for the current operation to finish."; return false; }
         if (!int.TryParse(IntervalBox.Text, out var minutes) || minutes is < 1 or > 1440)
         {
             FeedbackText.Text = "Enter a whole number from 1 to 1,440 minutes.";
@@ -122,7 +153,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     private async void LocalAddon_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "SNUETL sign-in component|SNUETL-SignIn-*.zip", CheckFileExists = true };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true) await RunAsync(() => SignInAddon.InstallAsync(dialog.FileName), "Verifying sign-in component…", "Automatic sign-in installed.");
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true) await RunAsync(() => controller.InstallSignInFromArchiveAsync(dialog.FileName), "Verifying sign-in component…", "Automatic sign-in installed.");
         ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed";
     }
     private async void RemoveAddon_Click(object sender, RoutedEventArgs e)

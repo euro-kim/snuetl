@@ -148,6 +148,8 @@ The installer checks **Use automatic login** by default. It finds the highest st
 
 For manual login, paste the complete Canvas token including its issued numeric prefix and `~`, such as `1~` followed by the long secret. Do not invent or append characters. SNUETL adds `Bearer` to API requests automatically and also accepts a copied `Bearer` or `Authorization: Bearer` header. This Canvas token is separate from an optional GitHub release-access token.
 
+Automatic login shows a persistent progress panel with download percentage/MB, verification and installation stages, and elapsed browser wait time. Cancel stops the active operation while preserving an existing installed component. Downloads time out after 45 seconds without data. The browser launches separately from the backend queue, and settings stay responsive while login runs. Course synchronization starts in the background after the account is verified.
+
 ### Private GitHub testing and updates
 
 The release repository is `euro-kim/snuetl`. Git SSH access can verify tags but does not grant the installed client access to release attachments. In **Settings → About & updates → Private GitHub release access**, save a fine-grained GitHub token scoped to this repository with **Contents: read**. It is stored in Windows Credential Manager, never settings JSON or logs, and is removed by uninstall. Do not paste it into an issue or chat. Manual Canvas-token setup does not require GitHub access.

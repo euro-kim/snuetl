@@ -12,6 +12,11 @@ public sealed class ClientController : IAsyncDisposable
     private CloudFilesProvider? provider;
     private Task? scheduler;
     private Task? updateCheck;
+    private Task? loginTask;
+    private CancellationTokenSource? loginCancellation;
+    public bool IsSigningIn => loginCancellation is not null;
+    public LoginProgress? AutomaticLoginProgress { get; private set; }
+    public event EventHandler? LoginProgressChanged;
     private readonly SemaphoreSlim updateLock = new(1,1);
     public string UpdateStatus { get; private set; } = "Checks GitHub weekly";
     public bool IsRefreshing { get; private set; }
@@ -65,43 +70,74 @@ public sealed class ClientController : IAsyncDisposable
         Publish();
     }
 
-    public async Task ConnectAutomaticallyAsync()
+    public Task ConnectAutomaticallyAsync() => StartLoginOperation(true);
+    public Task InstallSignInAsync() => StartLoginOperation(false);
+    public Task InstallSignInFromArchiveAsync(string archive) => StartLoginOperation(false,archive);
+    public void CancelAutomaticLogin()
     {
+        if (loginCancellation is null) return;
+        SetLoginProgress(new("Cancelling automatic login…"));
+        loginCancellation.Cancel();
+    }
+    private void SetLoginProgress(LoginProgress progress)
+    {
+        AutomaticLoginProgress = progress;
+        LoginProgressChanged?.Invoke(this,EventArgs.Empty);
+    }
+    private Task StartLoginOperation(bool connect, string? archive = null)
+    {
+        if (IsSigningIn) throw new InvalidOperationException("Automatic login is already running. Wait for it or choose Cancel.");
+        return loginTask = RunLoginOperationAsync(connect,archive);
+    }
+    private async Task RunLoginOperationAsync(bool connect, string? archive)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        loginCancellation = cancellation;
+        var ct = cancellation.Token;
         error = null;
-        Publish("Signing in…");
+        SetLoginProgress(new("Preparing automatic login…"));
+        var progress = new Progress<LoginProgress>(value =>
+        {
+            if (ReferenceEquals(loginCancellation,cancellation) && !ct.IsCancellationRequested) SetLoginProgress(value);
+        });
         try
         {
-            if (!SignInAddon.Installed) await InstallSignInAsync();
-            Publish("Complete sign-in in the browser…");
-            await backend.InvokeAsync<JsonElement>("auth.auto");
-            account = await backend.InvokeAsync<AccountStatus>("auth.status", new { verify = true });
-            if (!account.Ready) throw new BackendException("NOT_CONNECTED", "Canvas access could not be verified. Reconnect your account.");
-            await EnsureProviderAsync();
-            await RefreshAsync();
-        }
-        catch (BackendException exception)
-        {
-            if (exception.Code is "AUTHENTICATION_REQUIRED" or "TOKEN_EXPIRED" or "NOT_CONNECTED")
+            var executable = Path.Combine(store.DataDirectory,"addons","signin","snuetl-signin.exe");
+            if (!connect || !File.Exists(executable))
+                await SignInAddon.InstallAsync(archive,store.DataDirectory,progress:progress,ct:ct);
+            if (connect)
             {
-                account = account with { Ready = false };
+                // Launch separately: browser login must not occupy the single RPC worker
+                // or inherit a different frozen Python runtime's DLL search path.
+                await Task.Run(() => AutomaticLogin.RunAsync(store.DataDirectory,progress,ct),ct);
+                SetLoginProgress(new("Checking the saved Canvas token…"));
+                using var verification = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                verification.CancelAfter(TimeSpan.FromSeconds(60));
+                try { account = await backend.InvokeAsync<AccountStatus>("auth.status",new { verify = true },verification.Token); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                { throw new IOException("Canvas token verification timed out. Check your connection and try again."); }
+                if (!account.Ready || account.Valid != true)
+                    throw new BackendException("NOT_CONNECTED","Canvas access could not be verified. Try again or use a manual token.");
+                ct.ThrowIfCancellationRequested();
+                SetLoginProgress(new("Connecting your course folder…"));
+                await EnsureProviderAsync();
+                SetLoginProgress(new("Connected. Your courses are syncing in the background.",1));
+                _ = RefreshAsync();
             }
-            error = exception.Message;
-            Publish("Sign-in needs attention");
+            else SetLoginProgress(new("Automatic login installed. Choose Use automatic login to open the browser.",1));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            SetLoginProgress(new("Automatic login cancelled. You can retry or use a manual token."));
             throw;
         }
         catch (Exception exception)
         {
             error = exception.Message;
-            Publish("Sign-in needs attention");
+            SetLoginProgress(new(exception.Message));
             throw;
         }
-    }
-
-    public async Task InstallSignInAsync()
-    {
-        Publish("Downloading automatic login…");
-        try { await SignInAddon.InstallAsync(); }
-        finally { Publish(); }
+        finally { loginCancellation = null; LoginProgressChanged?.Invoke(this,EventArgs.Empty); Publish(); }
     }
 
     public async Task ConnectManualAsync(string token)
@@ -396,6 +432,7 @@ public sealed class ClientController : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         lifetime.Cancel();
+        if (loginTask is not null) { try { await loginTask; } catch (Exception) { /* Already shown in login progress. */ } }
         if (scheduler is not null)
         {
             try { await scheduler; } catch (OperationCanceledException) { }

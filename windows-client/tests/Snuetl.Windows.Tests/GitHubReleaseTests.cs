@@ -63,6 +63,43 @@ public class GitHubReleaseTests
             Assert.False(File.Exists(file+".partial"));
         } finally { if(Directory.Exists(dir)) Directory.Delete(dir,true); }
     }
+    sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer,int offset,int count) => throw new NotSupportedException();
+        public override long Seek(long offset,SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer,int offset,int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken ct = default)
+        { await Task.Delay(Timeout.Infinite,ct); return 0; }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DownloadCancellationAndIdleTimeoutRemovePartialFiles(bool cancel)
+    {
+        var dir = Path.Combine(Path.GetTempPath(),"snuetl-stalled-download-"+Guid.NewGuid());
+        try
+        {
+            using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) }));
+            using var api = new GitHubReleases(Repo,client) { DownloadIdleTimeout = cancel ? TimeSpan.FromMinutes(1) : TimeSpan.FromMilliseconds(100) };
+            using var cancellation = new CancellationTokenSource();
+            if (cancel) cancellation.CancelAfter(100);
+            var file = Path.Combine(dir,"setup.exe");
+            var asset = new ReleaseDownload("0.9.2","setup.exe",$"https://github.com/{Repo}/releases/download/v0.9.2/setup.exe",Payload.Length,Hash);
+            if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => api.DownloadAsync(asset,file,ct:cancellation.Token));
+            else Assert.Contains("stopped responding",(await Assert.ThrowsAsync<IOException>(() => api.DownloadAsync(asset,file))).Message);
+            Assert.False(File.Exists(file));
+            Assert.False(File.Exists(file+".partial"));
+        }
+        finally { if(Directory.Exists(dir)) Directory.Delete(dir,true); }
+    }
     [Fact]
     public async Task AddOnUsesHighestStableVersionRegardlessOfReleaseOrder()
     {

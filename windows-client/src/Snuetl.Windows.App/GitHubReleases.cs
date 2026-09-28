@@ -13,6 +13,7 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
     public const string DefaultRepository = "euro-kim/snuetl";
     private readonly HttpClient http = client ?? new() { Timeout = TimeSpan.FromMinutes(20) };
     private readonly bool ownsClient = client is null;
+    internal TimeSpan DownloadIdleTimeout { get; init; } = TimeSpan.FromSeconds(45);
     private string Repository => Regex.IsMatch(repository, @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") ? repository : throw new IOException("Use a GitHub owner/repository name.");
     public static Version? ParseVersion(string value)
     {
@@ -28,7 +29,7 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
             request.Headers.Accept.ParseAdd(binary ? "application/octet-stream" : "application/vnd.github+json");
             request.Headers.Add("X-GitHub-Api-Version","2022-11-28");
         }
-        request.Headers.UserAgent.ParseAdd("SNUETL-Windows/0.9.2");
+        request.Headers.UserAgent.ParseAdd("SNUETL-Windows/0.9.3");
         var response = await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         { response.Dispose(); throw new IOException($"GitHub releases for {Repository} are unavailable. For a private repository, save a GitHub token with Contents: read access in Settings."); }
@@ -105,19 +106,27 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
         if (!OwnedUrl(asset.Url) || asset.Size <= 0 || !Regex.IsMatch(asset.Sha256,@"\A[0-9a-fA-F]{64}\z")) throw new IOException("Invalid release asset metadata.");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
         var temp = target + ".partial";
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
-            using var response = await GetAsync(!string.IsNullOrEmpty(token) && OwnedApi(asset.ApiUrl) ? asset.ApiUrl! : asset.Url,ct,binary:true);
+            idle.CancelAfter(DownloadIdleTimeout);
+            using var response = await GetAsync(!string.IsNullOrEmpty(token) && OwnedApi(asset.ApiUrl) ? asset.ApiUrl! : asset.Url,idle.Token,binary:true).ConfigureAwait(false);
             await using (var input = await response.Content.ReadAsStreamAsync(ct))
             await using (var output = File.Create(temp))
             {
                 var buffer = new byte[131072]; long length = 0; int read;
-                while ((read = await input.ReadAsync(buffer,ct)) > 0)
+                var updates = System.Diagnostics.Stopwatch.StartNew();
+                while (true)
                 {
+                    idle.CancelAfter(DownloadIdleTimeout);
+                    read = await input.ReadAsync(buffer,idle.Token).ConfigureAwait(false);
+                    idle.CancelAfter(Timeout.InfiniteTimeSpan);
+                    if (read == 0) break;
                     length += read;
                     if (length > asset.Size) throw new IOException("The download size does not match GitHub's release metadata.");
-                    await output.WriteAsync(buffer.AsMemory(0,read),ct);
-                    progress?.Report((double)length / asset.Size);
+                    await output.WriteAsync(buffer.AsMemory(0,read),ct).ConfigureAwait(false);
+                    if (updates.ElapsedMilliseconds >= 100 || length == asset.Size)
+                    { progress?.Report((double)length / asset.Size); updates.Restart(); }
                 }
                 if (length != asset.Size) throw new IOException("The download was interrupted. Please try again.");
             }
@@ -125,6 +134,8 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
                 if (!Convert.ToHexString(await SHA256.HashDataAsync(stream,ct)).Equals(asset.Sha256,StringComparison.OrdinalIgnoreCase)) throw new IOException("The download failed its SHA-256 integrity check.");
             File.Move(temp,target,true);
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && idle.IsCancellationRequested)
+        { throw new IOException("The GitHub download stopped responding for 45 seconds. Check your connection and try again."); }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
     public void Dispose() { if (ownsClient) http.Dispose(); }

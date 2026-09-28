@@ -36,18 +36,10 @@ internal static class Program
                 Console.WriteLine($"Live release discovery: installer {core!.Version}, sign-in {addon!.Version}");
                 await SignInAddon.InstallAsync(dataDirectory:releaseRoot);
                 Check(File.ReadAllText(Path.Combine(releaseRoot,"addons","signin","component-sha256.txt")) == addon.Sha256, "Installed add-on digest mismatch");
-                var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(releaseRoot,"addons","signin","snuetl-signin.exe"), "--self-test")
-                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                start.Environment["SNUETL_WINDOWS_DATA_DIR"] = releaseRoot;
-                start.Environment["PLAYWRIGHT_BROWSERS_PATH"] = "0";
-                start.Environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1";
-                using var process = System.Diagnostics.Process.Start(start)!;
-                var stdout = process.StandardOutput.ReadToEndAsync();
-                var stderr = process.StandardError.ReadToEndAsync();
-                try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2)); }
-                catch { process.Kill(entireProcessTree:true); throw; }
-                Check(process.ExitCode == 0, "Published browser self-test failed: " + await stderr);
-                Console.WriteLine("PASS: published add-on downloaded, verified, installed and launched: " + await stdout);
+                var start = AutomaticLogin.CreateStartInfo(releaseRoot);
+                start.ArgumentList.Add("--self-test");
+                await AutomaticLogin.RunProcessAsync(start,new InlineProgress<LoginProgress>(p => Console.WriteLine(p.Message)),default,TimeSpan.FromMinutes(2));
+                Console.WriteLine("PASS: published add-on downloaded, verified, installed and launched through the automatic-login process runner.");
             }
             finally { if (Directory.Exists(releaseRoot)) Directory.Delete(releaseRoot,true); }
             return;
@@ -111,6 +103,21 @@ internal static class Program
             var corruptRejected = false;
             try { await SignInAddon.InstallAsync(archive,data,descriptor with { Sha256 = new string('0',64) }); } catch (IOException) { corruptRejected = true; }
             Check(corruptRejected && File.Exists(installedAddon),"Failed optional install damaged the existing component");
+            using (var cancelledInstall = new CancellationTokenSource())
+            {
+                var stages = new List<LoginProgress>();
+                var progress = new InlineProgress<LoginProgress>(value =>
+                {
+                    stages.Add(value);
+                    if (value.Message.StartsWith("Installing")) cancelledInstall.Cancel();
+                });
+                try { await SignInAddon.InstallAsync(archive,data,descriptor,progress,cancelledInstall.Token); throw new Exception("Cancelled installation unexpectedly succeeded"); }
+                catch (OperationCanceledException) { }
+                Check(File.ReadAllText(installedAddon) == "test component, never executed","Cancellation damaged the installed browser");
+                Check(stages.Any(p => p.Message.StartsWith("Verifying")),"Component verification progress missing");
+                Check(!Directory.EnumerateFileSystemEntries(Path.Combine(data,"addons"),"staging-*").Any(),"Cancelled installation left staging files");
+            }
+            await SignInAddon.InstallAsync(archive,data,descriptor); // The cancellation must release the install gate.
             await SignInAddon.RemoveAtAsync(data);
             Check(!Directory.Exists(Path.Combine(data,"addons","signin")),"Optional component removal failed");
             var store = new SettingsStore(data, configureStartup: false);
@@ -166,6 +173,31 @@ internal static class Program
                 tabs.SelectedIndex = 2; Render(settingsDashboard, Path.Combine(output, "settings-components.png"));
                 tabs.SelectedIndex = 3; Render(settingsDashboard, Path.Combine(output, "settings-appearance.png"));
                 tabs.SelectedIndex = 4; Render(settingsDashboard, Path.Combine(output, "settings-about.png"));
+                var gate = (SemaphoreSlim)typeof(SignInAddon).GetField("Gate",System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+                await gate.WaitAsync();
+                try
+                {
+                    var installing = controller.InstallSignInFromArchiveAsync(archive);
+                    await Task.Delay(100);
+                    tabs.SelectedIndex = 0;
+                    await Task.Delay(50);
+                    Check(settings.IsEnabled && tabs.IsEnabled,"Automatic login disabled the settings window");
+                    Check(((System.Windows.Controls.Button)settings.FindName("CancelLoginButton")).IsEnabled,"Cancel must stay enabled");
+                    Check(((Border)settings.FindName("LoginPanel")).Visibility == Visibility.Visible,"Login progress panel is missing");
+                    Render(settingsDashboard,Path.Combine(output,"settings-login-waiting.png"));
+                    typeof(ClientController).GetProperty("AutomaticLoginProgress")!.SetValue(controller,new LoginProgress("Downloading automatic login · 42% · 107.2 / 255.1 MB",0.42));
+                    settings.RenderLoginProgress();
+                    Render(settingsDashboard,Path.Combine(output,"settings-login-download.png"));
+                    Check(((System.Windows.Controls.ProgressBar)settings.FindName("LoginProgressBar")).Value == 42,"Download percentage is not visible");
+                    tabs.SelectedIndex = 2;
+                    await Task.Delay(50);
+                    Check(tabs.SelectedIndex == 2,"Login prevents navigating settings tabs");
+                    ((System.Windows.Controls.Button)settings.FindName("CancelLoginButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                    try { await installing.WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Cancel did not interrupt the installation wait"); }
+                    catch (OperationCanceledException) { }
+                    Check(!controller.IsSigningIn,"Login remains busy after cancellation");
+                }
+                finally { gate.Release(); }
                 var academic = new AcademicSnapshot { GeneratedAt = DateTimeOffset.Now, Courses = [new AcademicCourse { Id = "7", Name = "Computer Science", Url = "https://myetl.snu.ac.kr/courses/7" }],
                     Datasets = new() { ["announcements"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "Welcome to the new semester", course_name = "Computer Science", summary = "Lecture materials are now available in your SNUETL folder.", url = "https://myetl.snu.ac.kr/courses/7" })],
                     ["upcoming"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "Assignment 1 · Algorithm analysis", course_name = "Computer Science", due_at = DateTimeOffset.Now.AddDays(1).ToString("O"), url = "https://myetl.snu.ac.kr/courses/7" })] } };
@@ -217,6 +249,13 @@ internal static class Program
                 Check(leftover is null, "Explorer registration remains");
                 using var shell = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\CLSID\" + clsid);
                 Check(shell is null, "Explorer navigation entry remains");
+            }
+            await using (var stoppedBackend = new BackendClient(data))
+            {
+                await stoppedBackend.InvokeAsync<System.Text.Json.JsonElement>("shutdown");
+                await Task.Delay(150);
+                try { await stoppedBackend.InvokeAsync<System.Text.Json.JsonElement>("auth.status").WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Stopped worker accepted a request"); }
+                catch (BackendException) { }
             }
             Console.WriteLine("PASS: icon sizes, settings persistence, UI rendering, isolated cloud hydration, uninstall file preservation and Explorer removal.");
         }

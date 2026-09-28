@@ -1,5 +1,14 @@
 # Windows client releases
 
+## 0.9.3
+
+- Keep settings responsive during automatic login, with a persistent progress panel and Cancel.
+- Show download percentage and transferred MB, browser installation progress, launch status, and elapsed sign-in time.
+- Run verification/extraction/cleanup off the UI thread; cancel safely without damaging an existing browser component.
+- Launch the existing browser component directly, independently of the backend request queue and its Python runtime.
+- Time out stalled downloads and browser waits; reject requests to an exited backend instead of waiting indefinitely.
+- Start course sync in the background after successful login.
+
 ## 0.9.2
 
 - Select the highest stable Windows installer and browser add-on independently, including older release pages; historical missing checksums no longer block a newer release.

@@ -18,6 +18,7 @@ public sealed class BackendClient : IAsyncDisposable
     private readonly SemaphoreSlim writeLock = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private long nextId;
+    private Exception? terminalError;
 
     public BackendClient(string dataDirectory)
     {
@@ -58,6 +59,7 @@ public sealed class BackendClient : IAsyncDisposable
         object? parameters = null,
         CancellationToken cancellationToken = default)
     {
+        if (terminalError is { } stopped) throw stopped;
         var id = Interlocked.Increment(ref nextId);
         var completion = new TaskCompletionSource<JsonElement>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -66,23 +68,25 @@ public sealed class BackendClient : IAsyncDisposable
             throw new InvalidOperationException("Duplicate backend request ID");
         }
 
-        var request = JsonSerializer.Serialize(new { id, method, @params = parameters ?? new { } });
-        await writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await input.WriteLineAsync(request.AsMemory(), cancellationToken).ConfigureAwait(false);
-            await input.FlushAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            writeLock.Release();
-        }
+            if (terminalError is { } exited) throw exited;
+            var request = JsonSerializer.Serialize(new { id, method, @params = parameters ?? new { } });
+            await writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await input.WriteLineAsync(request.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await input.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally { writeLock.Release(); }
 
-        using var registration = cancellationToken.Register(
-            () => completion.TrySetCanceled(cancellationToken));
-        var element = await completion.Task.ConfigureAwait(false);
-        return element.Deserialize<T>()
-            ?? throw new BackendException("INVALID_RESPONSE", "The backend returned no data");
+            using var registration = cancellationToken.Register(
+                () => completion.TrySetCanceled(cancellationToken));
+            var element = await completion.Task.ConfigureAwait(false);
+            return element.Deserialize<T>()
+                ?? throw new BackendException("INVALID_RESPONSE", "The backend returned no data");
+        }
+        finally { pending.TryRemove(id,out _); }
     }
 
     private async Task ReadResponsesAsync(CancellationToken cancellationToken)
@@ -159,6 +163,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     private void FailPending(Exception exception)
     {
+        Interlocked.CompareExchange(ref terminalError,exception,null);
         foreach (var item in pending.ToArray())
         {
             if (pending.TryRemove(item.Key, out var completion))
