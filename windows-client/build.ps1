@@ -23,7 +23,8 @@ if (Test-Path (Join-Path $repoRoot '.tools\dotnet\dotnet.exe')) {
 Set-Location $repoRoot
 $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the project version' }
-$backendVersion = python -c 'import snuetl; print(snuetl.__version__)'
+$backendVersion = python -c "import runpy; print(runpy.run_path('src/snuetl/__init__.py')['__version__'])"
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the backend source version' }
 if ($backendVersion -ne $version) { throw 'pyproject.toml and snuetl.__version__ must match before building a release' }
 if (([IO.Path]::GetFullPath($buildRoot)) -ne (Join-Path $clientRoot 'build')) {
   throw 'Build output must stay inside windows-client/build'
