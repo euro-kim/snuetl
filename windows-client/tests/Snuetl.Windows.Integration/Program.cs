@@ -39,6 +39,8 @@ internal static class Program
                 var start = AutomaticLogin.CreateStartInfo(releaseRoot);
                 start.ArgumentList.Add("--self-test");
                 await AutomaticLogin.RunProcessAsync(start,new InlineProgress<LoginProgress>(p => Console.WriteLine(p.Message)),default,TimeSpan.FromMinutes(2));
+                Check(await SignInAddon.RemoveAfterLoginAsync(releaseRoot), "Published browser package cleanup failed");
+                Check(!Directory.Exists(Path.Combine(releaseRoot,"addons","signin")), "Published browser package remains after cleanup");
                 Console.WriteLine("PASS: published add-on downloaded, verified, installed and launched through the automatic-login process runner.");
             }
             finally { if (Directory.Exists(releaseRoot)) Directory.Delete(releaseRoot,true); }
@@ -118,7 +120,12 @@ internal static class Program
                 Check(!Directory.EnumerateFileSystemEntries(Path.Combine(data,"addons"),"staging-*").Any(),"Cancelled installation left staging files");
             }
             await SignInAddon.InstallAsync(archive,data,descriptor); // The cancellation must release the install gate.
-            await SignInAddon.RemoveAtAsync(data);
+            var savedAccount = Path.Combine(data,"account.json");
+            File.WriteAllText(savedAccount,"saved account sentinel");
+            using (var heldBrowser = new FileStream(installedAddon,FileMode.Open,FileAccess.Read,FileShare.None))
+                Check(!await SignInAddon.RemoveAfterLoginAsync(data),"Locked browser cleanup must report failure without throwing");
+            Check(await SignInAddon.RemoveAfterLoginAsync(data),"Post-login browser cleanup failed");
+            Check(File.ReadAllText(savedAccount) == "saved account sentinel","Browser cleanup touched saved account data");
             Check(!Directory.Exists(Path.Combine(data,"addons","signin")),"Optional component removal failed");
             var store = new SettingsStore(data, configureStartup: false);
             store.Save(new AppSettings { SyncRoot = sync, IconChoice = "Custom", StartWithWindows = false });
@@ -140,6 +147,14 @@ internal static class Program
                 Check(!ClientController.UpdateDue(new AppSettings { LastUpdateCheck = DateTimeOffset.UtcNow.AddDays(-6) },DateTimeOffset.UtcNow), "Updates must be weekly");
                 Check(!ClientController.UpdateDue(new AppSettings { LastUpdateAttempt = DateTimeOffset.UtcNow.AddHours(-1) },DateTimeOffset.UtcNow), "Failed checks must back off");
                 var activity = new MainWindow(controller); activity.Render(status);
+                Check(((System.Windows.Controls.Button)activity.FindName("UpdateBanner")).Visibility == Visibility.Collapsed,"Update banner should be hidden without an update");
+                var currentSettings = controller.Settings;
+                typeof(ClientController).GetProperty("Settings")!.SetValue(controller,currentSettings with { AvailableUpdate = new ReleaseDownload("99.0.0","SNUETLSetup-99.0.0.exe","https://github.com/euro-kim/snuetl/releases/download/v99.0.0/SNUETLSetup-99.0.0.exe",100,new string('a',64)) });
+                activity.Render(status);
+                Check(((System.Windows.Controls.Button)activity.FindName("UpdateBanner")).Visibility == Visibility.Visible,"Available update is invisible in mini panel");
+                Render(activity,Path.Combine(output,"mini-update.png"));
+                typeof(ClientController).GetProperty("Settings")!.SetValue(controller,currentSettings);
+                activity.Render(status);
                 ((System.Windows.Controls.TabControl)activity.FindName("FeedTabs")).SelectedIndex = 3;
                 Render(activity, Path.Combine(output, "activity.png"));
                 var activityList = (System.Windows.Controls.ListBox)activity.FindName("ActivityList");
@@ -163,6 +178,9 @@ internal static class Program
                 activity.Hide();
                 var settingsDashboard = new DashboardWindow(controller);
                 var settings = settingsDashboard.SettingsPage; settings.Render(status);
+                typeof(ClientController).GetField("account",System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(controller,new AccountStatus { Ready=true,ExpiresAt="2027-09-29T12:00:00Z" });
+                settings.Render(status);
+                Check(((TextBlock)settings.FindName("AccountExpiryText")).Text.Contains("2027-09-29"),"Saved API key expiry is not visible");
                 Render(settingsDashboard, Path.Combine(output, "settings-general.png"));
                 Check(Window.GetWindow(settings) == settingsDashboard, "Settings must be embedded in the dashboard");
                 var interval = (System.Windows.Controls.TextBox)settings.FindName("IntervalBox");

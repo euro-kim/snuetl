@@ -1,5 +1,12 @@
 # Windows client releases
 
+## 0.9.5
+
+- Show available updates in a mini-panel banner that opens the update settings directly, and clear stale update notices after an upgrade.
+- Remove the temporary browser package after automatic login verifies the saved token; download it again for the next login.
+- Show the saved automatic-token expiration in Settings and login completion, and explain the approximately 365-day requested lifetime before login.
+- Explain that manually pasted token expiry must be checked in Canvas, without displaying the internal placeholder date.
+
 ## 0.9.4
 
 - Remove the redundant installer browser-package option; automatic login downloads its component from inside the app with progress and cancellation.

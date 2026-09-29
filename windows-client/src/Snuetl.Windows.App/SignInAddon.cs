@@ -107,6 +107,13 @@ internal static class SignInAddon
         }
     }
     internal static Task RemoveAsync() => RemoveAtAsync(new SettingsStore().DataDirectory);
+    internal static async Task<bool> RemoveAfterLoginAsync(string dataDirectory)
+    {
+        // The browser process has exited and the saved token has been verified.
+        // Cleanup must neither block WPF nor turn a successful login into a failure.
+        try { await Task.Run(() => RemoveAtAsync(dataDirectory)); return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
     internal static async Task RemoveAtAsync(string dataDirectory)
     {
         await Gate.WaitAsync();

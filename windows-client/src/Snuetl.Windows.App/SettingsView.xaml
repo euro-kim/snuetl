@@ -53,8 +53,9 @@
                             <StackPanel>
                                 <TextBlock Text="Your account" Style="{StaticResource SectionTitle}"/>
                                 <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
+                                <TextBlock x:Name="AccountExpiryText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <StackPanel x:Name="SignInPanel">
-                                    <TextBlock Text="Use a Canvas API token, or choose the optional automatic sign-in download below. A browser opens only when you request automatic sign-in." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
+                                    <TextBlock Text="Automatic login downloads a temporary browser and requests an API key valid for about 365 days, or reuses your existing valid key. After your key is verified, the browser package is removed to free space. It downloads again when you need to sign in. Your saved key keeps course sync working." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
                                     <Button Content="Use automatic login (downloads component if needed)" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
                                     <Expander IsExpanded="True" Header="Use a Canvas API token" Margin="0,16,0,0">
                                         <StackPanel Margin="0,12,0,0">

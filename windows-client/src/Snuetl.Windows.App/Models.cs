@@ -44,6 +44,11 @@ public sealed record AccountStatus
 
     [JsonPropertyName("manual")]
     public bool Manual { get; init; }
+    public string ExpiryDescription => Manual
+        ? "API key expiration is set in Canvas. Check Account Settings → Approved Integrations for its expiry; SNUETL cannot read it from a pasted key."
+        : DateTimeOffset.TryParse(ExpiresAt, out var expiry)
+            ? $"API key expires {expiry.LocalDateTime:yyyy-MM-dd HH:mm} (local time). Sign in again when it expires. A revoked key may stop working sooner."
+            : "Automatic login requests a key valid for about 365 days. Its saved expiration date will appear here after connection.";
 }
 
 public sealed record Manifest

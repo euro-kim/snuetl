@@ -33,12 +33,15 @@ public sealed class ClientController : IAsyncDisposable
     public event EventHandler? AppearanceChanged;
     public AppSettings Settings { get; private set; }
     public ClientStatus Status => BuildStatus();
+    public string AccountExpiryDescription => account.ExpiryDescription;
     public event EventHandler<ClientStatus>? StatusChanged;
 
     public ClientController(SettingsStore store)
     {
         this.store = store;
         Settings = store.Load();
+        if (Settings.AvailableUpdate is { } cached && GitHubReleases.ParseVersion(cached.Version) <= GitHubReleases.ParseVersion(Branding.Version))
+        { Settings = Settings with { AvailableUpdate = null }; store.Save(Settings); }
         if (Settings.AvailableUpdate is { } update) UpdateStatus = $"Version {update.Version} is available · {update.Size / 1048576.0:F1} MB";
         else if (Settings.LastUpdateCheck is { } checkedAt) UpdateStatus = $"Checks GitHub weekly · Last checked {checkedAt.LocalDateTime:g}";
         Activity = new ActivityStore(store.DataDirectory);
@@ -119,9 +122,12 @@ public sealed class ClientController : IAsyncDisposable
                 if (!account.Ready || account.Valid != true)
                     throw new BackendException("NOT_CONNECTED","Canvas access could not be verified. Try again or use a manual token.");
                 ct.ThrowIfCancellationRequested();
+                SetLoginProgress(new("Connected. Removing the temporary sign-in browser…"));
+                var removed = await SignInAddon.RemoveAfterLoginAsync(store.DataDirectory);
                 SetLoginProgress(new("Connecting your course folder…"));
                 await EnsureProviderAsync();
-                SetLoginProgress(new("Connected. Your courses are syncing in the background.",1));
+                var cleanup = removed ? "Sign-in browser removed; it will download again when needed." : "Sign-in browser could not be removed. You can remove it in Settings → Components.";
+                SetLoginProgress(new($"Connected. {account.ExpiryDescription} {cleanup} Your courses are syncing in the background.",1));
                 _ = RefreshAsync();
             }
             else SetLoginProgress(new("Automatic login installed. Choose Use automatic login to open the browser.",1));

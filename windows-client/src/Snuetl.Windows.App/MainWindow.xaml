@@ -27,6 +27,9 @@
                 <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
                 <TextBlock x:Name="RefreshText" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,4,0,0"/>
                 <TextBlock x:Name="ErrorText" Foreground="#A3212A" TextWrapping="Wrap" MaxHeight="65" Margin="0,8,0,0"/>
+                <Button x:Name="UpdateBanner" Visibility="Collapsed" Click="Update_Click" HorizontalContentAlignment="Stretch" Margin="0,12,0,0" Padding="10,8" Background="#E8E8FA" AutomationProperties.Name="Review available SNUETL update">
+                    <StackPanel><TextBlock x:Name="UpdateBannerText" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="Review and install →" FontSize="12" Margin="0,3,0,0"/></StackPanel>
+                </Button>
             </StackPanel>
             <TabControl x:Name="FeedTabs" Grid.Row="2" Margin="16,0,16,10" Height="40" BorderThickness="0" Background="Transparent" SelectedIndex="0" SelectionChanged="FeedTab_Changed">
                 <TabControl.Resources><Style TargetType="TabItem">

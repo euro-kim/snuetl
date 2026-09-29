@@ -161,3 +161,7 @@ SNUETL checks for a newer stable Windows installer weekly, with a one-day retry 
 Upload `SNUETLSetup-<version>.exe` (or `SNUETLSetup.exe`) and `SHA256SUMS.txt` for a core release. Upload the sign-in ZIP only when it changes. Publishing and repository visibility remain under the maintainer's control.
 
 See [0.9.1 release notes](RELEASE-0.9.1.md) and [0.9 baseline validation](VALIDATION-0.9.0.md).
+
+After automatic login verifies the saved key, SNUETL removes the installed browser package to free space. Credentials and course data are kept; the next automatic login downloads the current browser package again. New automatic keys request about 365 days of validity, and Settings shows the saved expiry (including for reused keys). For pasted keys, check the expiry in Canvas. Cleanup failures are reported without failing the successful login.
+
+An available update appears as a persistent banner in the mini panel. Select it to open the update controls in Settings → About. Completed upgrades clear the cached banner.

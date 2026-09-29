@@ -135,6 +135,10 @@ public partial class App : System.Windows.Application
     {
         ShowDashboard(); dashboard?.SelectSettings();
     }
+    internal void ShowUpdateSettings()
+    {
+        ShowSettings(); dashboard?.SettingsPage.SelectUpdates();
+    }
     private void OnStatusChanged(object? sender, ClientStatus status) => Dispatcher.BeginInvoke(new Action(() =>
     {
         window?.Render(status);

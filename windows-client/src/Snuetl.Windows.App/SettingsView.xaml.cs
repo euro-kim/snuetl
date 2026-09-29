@@ -28,7 +28,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         StartupStatusText.Text = SettingsStore.StartupStatus;
         NotificationStatus.Text = NativeNotifications.Status;
         ComponentDescription.Text = SignInAddon.Description;
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed — core client ready";
+        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Downloads when you choose automatic login";
         RefreshGitHubAccess();
         Render(controller.Status); UpdateIcon();
         Loaded += (_, _) => { controller.LoginProgressChanged += LoginProgressChanged; RenderLoginProgress(); };
@@ -37,8 +37,9 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     public void Render(ClientStatus status)
     {
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed — ready for automatic login" : "Not installed — manual-token setup remains available";
+        ComponentStatus.Text = SignInAddon.Installed ? "Installed — ready for automatic login" : "Downloads when you choose automatic login";
         AccountText.Text = status.Account; RootText.Text = status.Root;
+        AccountExpiryText.Text = controller.AccountExpiryDescription;
         var connected = status.Account.StartsWith("Connected", StringComparison.Ordinal);
         SignInPanel.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
         SignOutButton.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
@@ -48,6 +49,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         RenderLoginProgress();
     }
     private void LoginProgressChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(RenderLoginProgress));
+    internal void SelectUpdates() => SettingsTabs.SelectedIndex = 4;
     internal void RenderLoginProgress()
     {
         var progress = controller.AutomaticLoginProgress;
@@ -90,7 +92,11 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         catch (Exception e) { FeedbackText.Text = e.Message; }
         finally { busy = false; Render(controller.Status); }
     }
-    private async void Connect_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.ConnectAutomaticallyAsync, "Preparing automatic login…", "Connected. Your courses are syncing in the background.");
+    private async void Connect_Click(object sender, RoutedEventArgs e)
+    {
+        await RunAsync(controller.ConnectAutomaticallyAsync, "Preparing automatic login…", "Connected. Your courses are syncing in the background.");
+        Render(controller.Status);
+    }
     private async void ManualConnect_Click(object sender, RoutedEventArgs e)
     { var token = TokenBox.Password; TokenBox.Clear(); await RunAsync(() => controller.ConnectManualAsync(token), "Checking your token…", "Account connected."); }
     private async void SignOut_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.DisconnectAsync, "Signing out…", "Signed out.");
@@ -148,7 +154,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     {
         if (DownloadConsent.IsChecked != true) { FeedbackText.Text = "Select the optional download checkbox first."; return; }
         await RunAsync(controller.InstallSignInAsync, "Downloading and verifying automatic sign-in…", "Automatic sign-in installed.");
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed — manual-token setup remains available";
+        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Downloads when you choose automatic login";
     }
     private async void LocalAddon_Click(object sender, RoutedEventArgs e)
     {

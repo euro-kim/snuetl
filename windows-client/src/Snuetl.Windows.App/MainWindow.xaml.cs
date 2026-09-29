@@ -51,6 +51,8 @@ public partial class MainWindow : Window
         RefreshText.Text = status.LastRefresh is null ? "Waiting for the first sync" : $"Last checked {status.LastRefresh.Value.LocalDateTime:g}";
         ErrorText.Text = status.Error ?? "";
         ErrorText.Visibility = status.Error is null ? Visibility.Collapsed : Visibility.Visible;
+        UpdateBanner.Visibility = controller.Settings.AvailableUpdate is null ? Visibility.Collapsed : Visibility.Visible;
+        UpdateBannerText.Text = controller.Settings.AvailableUpdate is { } update ? $"SNUETL {update.Version} is available" : "";
     }
     private void Activity_MouseWheel(object sender, MouseWheelEventArgs e)
     {
@@ -122,6 +124,7 @@ public partial class MainWindow : Window
         try { ClientController.OpenEtl(item.Url); } catch (Exception ex) { ErrorText.Text = ex.Message; ErrorText.Visibility = Visibility.Visible; }
     }
     private void Settings_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowSettings();
+    private void Update_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowUpdateSettings();
     private void Close_Click(object sender, RoutedEventArgs e) => Hide();
     private void Open_Click(object sender, RoutedEventArgs e) => controller.OpenFolder();
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await controller.RefreshAsync(manual: true);
