@@ -29,7 +29,7 @@ public partial class MainWindow : Window
         var snapshot = controller.ActivitySnapshot().Where(e => e.EventType == "file" && !e.IsRoutineGeneratedCopy).ToArray();
         // Insert only new rows: preserve the user's scroll position while syncing.
         var unseen = entries.Count == 0 ? snapshot : snapshot.TakeWhile(e => e.Time != entries[0].Time || e.Path != entries[0].Path || e.Action != entries[0].Action).ToArray();
-        foreach (var entry in unseen.Reverse()) entries.Insert(0, entry);
+        foreach (var entry in Enumerable.Reverse(unseen)) entries.Insert(0, entry);
         while (entries.Count > 500) entries.RemoveAt(entries.Count - 1);
         if (offset > 0) { ActivityList.UpdateLayout(); scroll?.ScrollToVerticalOffset(offset + Math.Max(0, scroll.ExtentHeight - extent)); }
         if (AcademicList.Visibility == Visibility.Visible) ReloadAcademic();
