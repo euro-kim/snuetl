@@ -1,5 +1,12 @@
 # Windows client releases
 
+## 0.9.4
+
+- Remove the redundant installer browser-package option; automatic login downloads its component from inside the app with progress and cancellation.
+- Add Alerts, Announcements, Deadlines, and Files tabs to the mini panel, with course names, message previews, due dates, and direct eTL links.
+- Suppress routine generated Markdown save/remove activity while retaining local-edit preservation warnings and real course file activity.
+- Include the class and announcement message in desktop notifications.
+
 ## 0.9.3
 
 - Keep settings responsive during automatic login, with a persistent progress panel and Cancel.

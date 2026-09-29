@@ -43,8 +43,9 @@ def reconcile(state, datasets, preferences, now=None):
             previous = seen.get(key)
             if previous != rev and not initial and selected(preferences, category, row.get('course_id')):
                 event = dict(id=revision([key,rev]), category=category, course_id=str(row.get('course_id') or ''),
+                             course_name=row.get('course_name') or next((c.get('name') for c in state.get('courses', []) if str(c['id']) == str(row.get('course_id'))), '') or '',
                              title=row.get('title') or row.get('course_name') or 'Course grade updated',
-                             detail=('New' if previous is None else 'Updated') + ' · ' + kind,
+                             detail=(row.get('summary') or '') if kind == 'announcements' else ('New' if previous is None else 'Updated') + ' · ' + kind,
                              url=row.get('url'), time=now.isoformat())
                 emitted.append(event)
             seen[key] = rev
@@ -71,7 +72,7 @@ def reconcile(state, datasets, preferences, now=None):
                     active[key] = True
                     if reminded: continue
                     reminded = True
-                    emitted.append(dict(id=revision(key), category='reminders', course_id=str(row.get('course_id') or ''), title=row.get('title') or 'Assignment due', detail=f"Due {due.astimezone():%b %d, %H:%M}", url=row.get('url'), time=now.isoformat()))
+                    emitted.append(dict(id=revision(key), category='reminders', course_id=str(row.get('course_id') or ''), course_name=row.get('course_name') or next((c.get('name') for c in state.get('courses', []) if str(c['id']) == str(row.get('course_id'))), '') or '', title=row.get('title') or 'Assignment due', detail=f"Due {due.astimezone():%b %d, %H:%M}", url=row.get('url'), time=now.isoformat()))
         state['reminders'] = active
     known = {e['id'] for e in history}
     emitted = [e for e in emitted if e['id'] not in known]

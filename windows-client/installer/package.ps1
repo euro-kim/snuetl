@@ -51,9 +51,8 @@ if ($env:SNUETL_SIGN_COMMAND) {
   if ($LASTEXITCODE -ne 0) { throw 'MSI signing failed' }
 }
 $component = Get-Content (Join-Path $PayloadDir "signin-component.json") -Raw | ConvertFrom-Json
-$sizes = "{0:N1} MB download / {1:N1} MB installed" -f ($component.DownloadBytes / 1MB), ($component.InstalledBytes / 1MB)
 & $wix build -arch x64 -ext WixToolset.BootstrapperApplications.wixext `
-  -d "ThemeFile=$(Join-Path $PSScriptRoot 'Theme.xml')" -d "SignInSizes=$sizes" -d "ProductVersion=$Version" -d "MsiPath=$msi" (Join-Path $PSScriptRoot 'Bundle.wxs') -out $setup
+  -d "ThemeFile=$(Join-Path $PSScriptRoot 'Theme.xml')" -d "ProductVersion=$Version" -d "MsiPath=$msi" (Join-Path $PSScriptRoot 'Bundle.wxs') -out $setup
 if ($LASTEXITCODE -ne 0) { throw 'Could not build the setup EXE' }
 if ($env:SNUETL_SIGN_COMMAND) {
   & $env:SNUETL_SIGN_COMMAND $setup

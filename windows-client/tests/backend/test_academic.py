@@ -25,6 +25,15 @@ def test_no_opt_in_and_course_override():
     assert not reconcile(state,{'announcements':[{**row,'title':'B'}]}, {})
     assert not reconcile(state,{'announcements':[{**row,'title':'C'}]}, {'categories':['announcements'],'courses':{'7':[]}})
 
+def test_announcement_event_has_course_and_message():
+    state={'courses':[{'id':'7','name':'Computer Science'}]}
+    reconcile(state,{'announcements':[]},PREFS)
+    row={'announcement_id':1,'course_id':7,'title':'Room change','summary':'Meet in room 301.', 'url':'https://myetl.snu.ac.kr/courses/7/discussion_topics/1'}
+    event, = reconcile(state,{'announcements':[row]},PREFS)
+    assert event['course_name']=='Computer Science'
+    assert event['detail']=='Meet in room 301.'
+    assert event['url']==row['url']
+
 def test_deadline_edits_submissions_and_dedup():
     now=datetime(2026,9,27,tzinfo=UTC)
     row={'assignment_id':3,'course_id':7,'title':'Paper','due_at':(now+timedelta(minutes=45)).isoformat()}

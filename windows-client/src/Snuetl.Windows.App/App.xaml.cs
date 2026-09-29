@@ -44,13 +44,6 @@ public partial class App : System.Windows.Application
             controller.AppearanceChanged += (_, _) => UpdateIcon();
             await controller.StartAsync();
             ConfigureTray();
-            if (e.Args.Contains("--install-signin=1"))
-            {
-                ShowSettings();
-                try { await controller.InstallSignInAsync(); }
-                catch (OperationCanceledException) { /* Cancellation is displayed in the settings progress panel. */ }
-                catch (Exception ex) { System.Windows.MessageBox.Show("The core client is installed and ready. Optional automatic sign-in could not be downloaded. For private releases, save GitHub access in Settings → About & updates, then retry in Components. Manual Canvas token setup remains available.\n\n" + ex.Message, "SNUETL optional component"); }
-            }
             if (!e.Args.Contains("--background"))
             {
                 if (!controller.Settings.SetupCompleted || !controller.Status.Account.StartsWith("Connected", StringComparison.Ordinal)) ShowSettings();

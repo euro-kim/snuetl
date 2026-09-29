@@ -3,7 +3,6 @@
            Version="$(var.ProductVersion)"
            UpgradeCode="A6797C5E-1774-45A9-A264-B872DE246A27"
            Scope="perUser">
-    <Property Id="INSTALLSIGNIN" Value="1" Secure="yes" />
     <MajorUpgrade Schedule="afterInstallExecute" DowngradeErrorMessage="A newer SNUETL version is already installed." />
     <Binary Id="ShutdownHelper" SourceFile="$(var.ShutdownHelper)" />
     <CustomAction Id="StopSNUETL" BinaryRef="ShutdownHelper" ExeCommand="&quot;[BINDIR]SNUETL.exe&quot;" Return="check" />
@@ -44,7 +43,7 @@
 
     <CustomAction Id="UnregisterSyncRoot" FileRef="SNUETLEXE" ExeCommand="--uninstall"
                   Execute="deferred" Impersonate="yes" Return="check" />
-    <CustomAction Id="LaunchSNUETL" FileRef="SNUETLEXE" ExeCommand="--install-signin=[INSTALLSIGNIN]"
+    <CustomAction Id="LaunchSNUETL" FileRef="SNUETLEXE" ExeCommand=""
                   Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
       <Custom Action="StopSNUETL" Before="InstallValidate" Condition="NOT UPGRADINGPRODUCTCODE" />

@@ -36,7 +36,7 @@ internal static class NativeNotifications
             var files = events.All(e => e.Category == "files");
             var route = files ? "files" : "notifications";
             var title = events.Count == 1 ? events[0].Title : $"{events.Count} updates from SNU eTL";
-            var body = events.Count == 1 ? events[0].Detail : string.Join(" · ", events.Take(3).Select(e => e.Title));
+            var body = events.Count == 1 ? $"{events[0].CourseLabel} · {events[0].Detail}" : string.Join(" · ", events.Take(3).Select(e => $"{e.CourseLabel}: {e.Title}"));
             var xml = new XmlDocument();
             xml.LoadXml($"<toast activationType='protocol' launch='snuetl://{route}'><visual><binding template='ToastGeneric'><text>{SecurityElement.Escape(title)}</text><text>{SecurityElement.Escape(body)}</text></binding></visual><audio silent='true'/></toast>");
             notifier.Show(new ToastNotification(xml) { Tag = files ? "files" : "academic", Group = "updates", ExpirationTime = DateTimeOffset.Now.AddDays(1) });

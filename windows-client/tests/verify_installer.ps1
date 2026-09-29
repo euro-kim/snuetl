@@ -29,7 +29,9 @@ try {
   $shortcutProperties = @(Read-Table 'SELECT `PropertyKey`,`PropVariantValue` FROM `MsiShortcutProperty`' @('Key','Value'))
   if (-not ($shortcutProperties | Where-Object { $_.Key -eq 'System.AppUserModel.ID' -and $_.Value -eq 'SNUETL.Windows' })) { throw 'Notification identity is missing from the Start Menu shortcut' }
   if (-not ($shortcutProperties | Where-Object Key -EQ 'System.AppUserModel.ToastActivatorCLSID')) { throw 'Notification activation identity is missing' }
-  if (($properties | Where-Object Name -EQ 'INSTALLSIGNIN').Value -ne '1') { throw 'Automatic API setup must be checked by default' }
+  if ($properties | Where-Object Name -EQ 'INSTALLSIGNIN') { throw 'Browser installation must be chosen inside the app, not the installer' }
+  $customActions = @(Read-Table 'SELECT `Action`,`Target` FROM `CustomAction`' @('Action','Target'))
+  if (($customActions | Where-Object Action -EQ 'LaunchSNUETL').Target -like '*install-signin*') { throw 'Installer must not download the browser automatically' }
   Write-Host 'Installer checks passed: version, upgrade isolation, shutdown sequence and runtime-folder cleanup.'
 } finally {
   [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)

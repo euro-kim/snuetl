@@ -15,7 +15,7 @@ public partial class MainWindow : Window
         InitializeComponent(); this.controller = controller; ActivityList.ItemsSource = entries;
         Render(controller.Status); ReloadActivity(); UpdateIcon();
         controller.Activity.Changed += (_, _) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible) ReloadActivity(); }));
-        controller.AcademicChanged += (_, _) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible && AcademicList.Visibility == Visibility.Visible) ShowAlerts(); }));
+        controller.AcademicChanged += (_, _) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible) ReloadAcademic(); }));
         IsVisibleChanged += (_, _) => { if (IsVisible) ReloadActivity(); };
         Closing += (_, args) => { args.Cancel = true; Hide(); };
         Deactivated += (_, _) => Hide();
@@ -26,13 +26,13 @@ public partial class MainWindow : Window
         var scroll = FindScrollViewer(ActivityList);
         var offset = scroll?.VerticalOffset ?? 0;
         var extent = scroll?.ExtentHeight ?? 0;
-        var snapshot = controller.ActivitySnapshot();
+        var snapshot = controller.ActivitySnapshot().Where(e => e.EventType == "file" && !e.IsRoutineGeneratedCopy).ToArray();
         // Insert only new rows: preserve the user's scroll position while syncing.
         var unseen = entries.Count == 0 ? snapshot : snapshot.TakeWhile(e => e.Time != entries[0].Time || e.Path != entries[0].Path || e.Action != entries[0].Action).ToArray();
         foreach (var entry in unseen.Reverse()) entries.Insert(0, entry);
         while (entries.Count > 500) entries.RemoveAt(entries.Count - 1);
         if (offset > 0) { ActivityList.UpdateLayout(); scroll?.ScrollToVerticalOffset(offset + Math.Max(0, scroll.ExtentHeight - extent)); }
-        if (AcademicList.Visibility == Visibility.Visible) ShowAlerts();
+        if (AcademicList.Visibility == Visibility.Visible) ReloadAcademic();
         else EmptyText.Visibility = entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
     internal void UpdateIcon()
@@ -79,22 +79,46 @@ public partial class MainWindow : Window
         catch (Exception ex) { ErrorText.Text = ex.Message; ErrorText.Visibility = Visibility.Visible; }
     }
     private void Dashboard_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowDashboard();
-    private void Alerts_Click(object sender, RoutedEventArgs e) => ShowAlerts();
-    private void ShowAlerts()
+    private void FeedTab_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        ActivityList.Visibility = Visibility.Collapsed; AcademicList.Visibility = Visibility.Visible;
-        AcademicList.ItemsSource = controller.Academic.Events;
-        EmptyText.Text = "No academic alerts yet. Choose notification categories in Settings.";
-        EmptyText.Visibility = controller.Academic.Events.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (controller is null || ActivityList is null || AcademicList is null) return;
+        var files = FeedTabs.SelectedIndex == 3;
+        ActivityList.Visibility = files ? Visibility.Visible : Visibility.Collapsed;
+        AcademicList.Visibility = files ? Visibility.Collapsed : Visibility.Visible;
+        if (files) { EmptyText.Text = "No file activity yet. Saved announcement copies are kept out of this feed."; ReloadActivity(); }
+        else ReloadAcademic(resetScroll:true);
     }
-    private void FilesTab_Click(object sender, RoutedEventArgs e)
+    private void ReloadAcademic(bool resetScroll = false)
     {
-        AcademicList.Visibility = Visibility.Collapsed; ActivityList.Visibility = Visibility.Visible;
-        EmptyText.Text = "Your file activity will appear here."; ReloadActivity();
+        if (FeedTabs.SelectedIndex == 3) return;
+        var now = DateTimeOffset.Now;
+        var items = FeedTabs.SelectedIndex switch
+        {
+            1 => MiniPanelFeed.Announcements(controller.Academic),
+            2 => MiniPanelFeed.Deadlines(controller.Academic,now),
+            _ => MiniPanelFeed.Alerts(controller.Academic,now)
+        };
+        var scroll = FindScrollViewer(AcademicList);
+        var offset = scroll?.VerticalOffset ?? 0;
+        var extent = scroll?.ExtentHeight ?? 0;
+        if (resetScroll || AcademicList.ItemsSource is not IReadOnlyList<MiniPanelItem> previous || !previous.SequenceEqual(items))
+        {
+            AcademicList.ItemsSource = items;
+            AcademicList.UpdateLayout();
+            scroll = FindScrollViewer(AcademicList);
+            scroll?.ScrollToVerticalOffset(resetScroll ? 0 : offset > 0 ? Math.Max(0,offset + scroll.ExtentHeight - extent) : 0);
+        }
+        EmptyText.Text = FeedTabs.SelectedIndex switch
+        {
+            1 => "No announcements yet. Sync to check your courses.",
+            2 => "No pending deadlines. You're caught up!",
+            _ => "No recent course alerts. Announcements and approaching deadlines will appear here."
+        };
+        EmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
     private void AcademicItem_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.Button { Tag: AcademicEvent item }) return;
+        if (sender is not System.Windows.Controls.Button { Tag: MiniPanelItem item } || !item.CanOpen) return;
         try { ClientController.OpenEtl(item.Url); } catch (Exception ex) { ErrorText.Text = ex.Message; ErrorText.Visibility = Visibility.Visible; }
     }
     private void Settings_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowSettings();

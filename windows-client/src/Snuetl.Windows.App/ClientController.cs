@@ -328,7 +328,8 @@ public sealed class ClientController : IAsyncDisposable
     }
 
     public IReadOnlyList<ActivityEntry> ActivitySnapshot() => Activity.Snapshot().Select(e =>
-        e with { Unavailable = !string.IsNullOrEmpty(e.Path) && !File.Exists(Path.Combine(Settings.SyncRoot,e.Path)) }).ToArray();
+        e with { CourseName = Academic.Courses.FirstOrDefault(c => c.Id == e.CourseId)?.Name,
+            Unavailable = !string.IsNullOrEmpty(e.Path) && !File.Exists(Path.Combine(Settings.SyncRoot,e.Path)) }).ToArray();
 
     public void SaveNotifications(NotificationPreferences preferences)
     {

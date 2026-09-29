@@ -139,6 +139,8 @@ public sealed record NotificationPreferences
 }
 public sealed record AcademicEvent
 {
+    [JsonPropertyName("course_name")] public string CourseName { get; init; } = "";
+    [JsonIgnore] public string CourseLabel => CourseName.Length > 0 ? CourseName : CourseId.Length > 0 ? $"Course {CourseId}" : "SNU eTL";
     [JsonPropertyName("id")] public string Id { get; init; } = "";
     [JsonPropertyName("category")] public string Category { get; init; } = "";
     [JsonPropertyName("course_id")] public string CourseId { get; init; } = "";

@@ -11,10 +11,22 @@ public sealed record ActivityEntry(DateTimeOffset Time, string Action, string Pa
     public string BadgeBackground => Badge switch { "PDF" or "!" => "#FDECEF", "MD" => "#EAF0FF", "📣" => "#FFF4D9", "✓" => "#E5F6EF", "PPT" => "#FFF0E5", _ => "#F0ECFA" };
     public string EventType { get; init; } = "file";
     public string? CourseId { get; init; }
+    public string? ContentKind { get; init; }
+    public string? CourseName { get; init; }
+    public bool IsRoutineGeneratedCopy
+    {
+        get
+        {
+            var parts = Path.Replace('\\','/').Split('/');
+            var generated = ContentKind is "announcement" or "page" or "syllabus"
+                || (parts.Length >= 4 && parts[2] is "articles" or "syllabus" && Path.EndsWith(".md",StringComparison.OrdinalIgnoreCase));
+            return generated && !Action.Contains("preserved",StringComparison.OrdinalIgnoreCase);
+        }
+    }
     public bool Unavailable { get; init; }
     public string StatusLabel => Unavailable ? Action + " · Unavailable" : Action;
     public string DirectoryLabel => System.IO.Path.GetDirectoryName(Path)?.Replace('\\', '/') ?? "";
-    public string Course => Path.Replace('\\', '/').Split('/').ElementAtOrDefault(1) ?? "";
+    public string Course => CourseName ?? System.Text.RegularExpressions.Regex.Replace(Path.Replace('\\', '/').Split('/').ElementAtOrDefault(1) ?? "", @"--\d+$", "");
     public string TimeLabel => Time.LocalDateTime.ToString("MMM d · HH:mm:ss");
     public string Name => string.IsNullOrEmpty(Path) ? "SNUETL" : System.IO.Path.GetFileName(Path);
 }
@@ -31,15 +43,17 @@ public sealed class ActivityStore : IDisposable
     {
         file = System.IO.Path.Combine(directory, "activity.json");
         flushTimer = new(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
-        try { entries = JsonSerializer.Deserialize<List<ActivityEntry>>(File.ReadAllText(file))?.Take(500).ToList() ?? []; }
+        try { entries = JsonSerializer.Deserialize<List<ActivityEntry>>(File.ReadAllText(file))?.Where(e => !e.IsRoutineGeneratedCopy).Take(500).ToList() ?? []; }
         catch (Exception e) when (e is IOException or JsonException) { }
     }
     public IReadOnlyList<ActivityEntry> Snapshot() { lock (gate) return entries.ToArray(); }
-    public void Add(string action, string path = "", string? courseId = null)
+    public void Add(string action, string path = "", string? courseId = null, string? contentKind = null)
     {
+        var entry = new ActivityEntry(DateTimeOffset.Now,action,path) { CourseId = courseId, ContentKind = contentKind, EventType = string.IsNullOrEmpty(path) ? "status" : "file" };
+        if (entry.IsRoutineGeneratedCopy) return;
         lock (gate)
         {
-            entries.Insert(0, new(DateTimeOffset.Now, action, path) { CourseId = courseId, EventType = string.IsNullOrEmpty(path) ? "status" : "file" });
+            entries.Insert(0, entry);
             if (entries.Count > 500) entries.RemoveRange(500, entries.Count - 500);
             if (!dirty) flushTimer.Change(1000, Timeout.Infinite);
             dirty = true;
@@ -68,11 +82,11 @@ internal sealed class ActivityPlaceholderStore(IPlaceholderStore inner, Activity
 {
     public Task<IReadOnlyList<LocalEntry>> SnapshotAsync(CancellationToken ct) => inner.SnapshotAsync(ct);
     public async Task CreateAsync(ManifestEntry e, string path, CancellationToken ct)
-    { await inner.CreateAsync(e, path, ct); activity.Add("Added to cloud folder", path, e.CourseId); }
+    { await inner.CreateAsync(e, path, ct); activity.Add("Added to cloud folder", path, e.CourseId,e.Kind); }
     public async Task UpdateAsync(LocalEntry local, ManifestEntry remote, CancellationToken ct)
-    { await inner.UpdateAsync(local, remote, ct); activity.Add("Updated from SNU eTL", remote.RelativePath, remote.CourseId); }
+    { await inner.UpdateAsync(local, remote, ct); activity.Add("Updated from SNU eTL", remote.RelativePath, remote.CourseId,remote.Kind); }
     public async Task RemoveAsync(LocalEntry local, CancellationToken ct)
-    { await inner.RemoveAsync(local, ct); activity.Add("Removed from SNU eTL", local.RelativePath, local.Identity?.CourseId); }
+    { await inner.RemoveAsync(local, ct); activity.Add("Removed from SNU eTL", local.RelativePath, local.Identity?.CourseId,local.Identity?.Kind); }
     public async Task PreserveRemovedEditAsync(LocalEntry local, CancellationToken ct)
     { await inner.PreserveRemovedEditAsync(local, ct); activity.Add("Local changes preserved", local.RelativePath); }
     public async Task PreserveRenameAsync(LocalEntry local, CancellationToken ct)

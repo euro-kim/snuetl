@@ -140,6 +140,7 @@ internal static class Program
                 Check(!ClientController.UpdateDue(new AppSettings { LastUpdateCheck = DateTimeOffset.UtcNow.AddDays(-6) },DateTimeOffset.UtcNow), "Updates must be weekly");
                 Check(!ClientController.UpdateDue(new AppSettings { LastUpdateAttempt = DateTimeOffset.UtcNow.AddHours(-1) },DateTimeOffset.UtcNow), "Failed checks must back off");
                 var activity = new MainWindow(controller); activity.Render(status);
+                ((System.Windows.Controls.TabControl)activity.FindName("FeedTabs")).SelectedIndex = 3;
                 Render(activity, Path.Combine(output, "activity.png"));
                 var activityList = (System.Windows.Controls.ListBox)activity.FindName("ActivityList");
                 var scroll = MainWindow.FindScrollViewer(activityList)!;
@@ -202,6 +203,17 @@ internal static class Program
                     Datasets = new() { ["announcements"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "Welcome to the new semester", course_name = "Computer Science", summary = "Lecture materials are now available in your SNUETL folder.", url = "https://myetl.snu.ac.kr/courses/7" })],
                     ["upcoming"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "Assignment 1 · Algorithm analysis", course_name = "Computer Science", due_at = DateTimeOffset.Now.AddDays(1).ToString("O"), url = "https://myetl.snu.ac.kr/courses/7" })] } };
                 typeof(ClientController).GetProperty("Academic")!.SetValue(controller,academic);
+                var feedTabs = (System.Windows.Controls.TabControl)activity.FindName("FeedTabs");
+                var academicList = (System.Windows.Controls.ListBox)activity.FindName("AcademicList");
+                feedTabs.SelectedIndex = 0; Render(activity, Path.Combine(output, "mini-alerts.png"));
+                Check(academicList.Items.Count == 2, "Alerts must include announcements and deadlines without notification opt-in");
+                var academicButton = FindByTag<System.Windows.Controls.Button>(academicList, b => b.Tag is MiniPanelItem);
+                Check(academicButton is { IsEnabled: true, Focusable: true }, "Course alert must be accessible and openable");
+                feedTabs.SelectedIndex = 1; Render(activity, Path.Combine(output, "mini-announcements.png"));
+                Check(academicList.Items.Count == 1 && ((MiniPanelItem)academicList.Items[0]).Course == "Computer Science", "Announcement tab lost its course label");
+                feedTabs.SelectedIndex = 2; Render(activity, Path.Combine(output, "mini-deadlines.png"));
+                Check(academicList.Items.Count == 1 && ((MiniPanelItem)academicList.Items[0]).Category == "deadlines", "Deadline tab contains unrelated activity");
+                activity.Hide();
                 var dashboard = new DashboardWindow(controller); Render(dashboard, Path.Combine(output, "dashboard.png")); dashboard.Close();
                 settingsDashboard.Close();
                 if (args.Contains("--benchmark"))

@@ -3,14 +3,12 @@
   <Bundle Name="SNUETL Setup" Manufacturer="snuetl contributors"
           Version="$(var.ProductVersion)"
           UpgradeCode="D0A04EB3-529A-499D-A7DD-0CC5464C2BE2">
-    <Variable Name="InstallSignIn" Type="numeric" Value="1" />
-    <Variable Name="SignInSizes" Type="string" Value="$(var.SignInSizes)" />
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" ThemeFile="$(var.ThemeFile)" SuppressOptionsUI="yes"
           LicenseUrl="https://github.com/euro-kim/snuetl/blob/main/LICENSE" />
     </BootstrapperApplication>
     <Chain>
-      <MsiPackage SourceFile="$(var.MsiPath)"><MsiProperty Name="INSTALLSIGNIN" Value="[InstallSignIn]" /></MsiPackage>
+      <MsiPackage SourceFile="$(var.MsiPath)" />
     </Chain>
   </Bundle>
 </Wix>
