@@ -58,6 +58,7 @@ def test_container_preserves_existing_mounted_directory_mode(tmp_path: Path, mon
 def test_defaults_without_file(tmp_path: Path) -> None:
     config = load_config(tmp_path / "missing.toml")
     assert config.base_url == "https://etl.snu.ac.kr/login"
+    assert config.browser_engine == "firefox"
     assert config.browser_channel is None
     assert config.retry_count == 3
     assert config.setup_complete is False
@@ -72,6 +73,7 @@ base_url = "https://etl.snu.ac.kr/login/"
 download_dir = "~/etl-files"
 state_dir = "~/etl-state"
 [browser]
+engine = "chromium"
 channel = "chrome"
 executable_path = "/usr/bin/chromium"
 headless = false
@@ -86,6 +88,7 @@ excluded_course_ids = [123, "abc"]
     config = load_config(path)
     assert config.base_url == "https://etl.snu.ac.kr/login"
     assert config.browser_channel is None
+    assert config.browser_engine == "chromium"
     assert config.browser_executable_path == Path("/usr/bin/chromium")
     assert config.headless is False
     assert config.excluded_course_ids == frozenset({"123", "abc"})
@@ -105,6 +108,21 @@ def test_rejects_string_boolean(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_rejects_unknown_browser_engine(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[browser]\nengine = "webkit"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="browser.engine"):
+        load_config(path)
+
+
+def test_legacy_explicit_chrome_channel_keeps_chromium(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[browser]\nchannel = "chrome"\n', encoding="utf-8")
+    config = load_config(path)
+    assert config.browser_engine == "chromium"
+    assert config.browser_channel == "chrome"
+
+
 def test_save_config_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "private" / "config.toml"
     original = load_config(tmp_path / "missing.toml")
@@ -118,6 +136,7 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     loaded = load_config(path)
     assert loaded.download_dir == tmp_path / "강의 자료"
     assert loaded.browser_executable_path == Path("/usr/bin/chromium")
+    assert loaded.browser_engine == "firefox"
     assert loaded.setup_complete is True
     assert path.stat().st_mode & 0o777 == 0o600
 

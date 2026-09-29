@@ -27,7 +27,7 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 
 RUN python -m pip install --no-cache-dir . \
-    && python -m playwright install --with-deps chromium \
+    && python -m playwright install --with-deps firefox \
     && apt-get update \
     && apt-get install --yes --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \

@@ -58,6 +58,7 @@ class Config:
     base_url: str
     download_dir: Path
     state_dir: Path
+    browser_engine: str
     browser_channel: str | None
     browser_executable_path: Path | None
     headless: bool
@@ -196,6 +197,18 @@ def load_config(path: Path | None = None) -> Config:
     else:
         raise ConfigError("browser.executable_path must be a filesystem path")
 
+    engine_value = browser.get("engine")
+    if engine_value is None:
+        # Preserve explicit Chromium installations from older configuration files,
+        # while moving new/default Linux deployments to the smaller Firefox build.
+        engine = "chromium" if channel is not None or executable_path is not None else "firefox"
+    elif isinstance(engine_value, str) and engine_value.casefold() in {"chromium", "firefox"}:
+        engine = engine_value.casefold()
+    else:
+        raise ConfigError("browser.engine must be 'firefox' or 'chromium'")
+    if engine != "chromium" and channel is not None:
+        raise ConfigError("browser.channel is supported only when browser.engine is 'chromium'")
+
     headless_value = browser.get("headless", True)
     if not isinstance(headless_value, bool):
         raise ConfigError("browser.headless must be true or false")
@@ -301,6 +314,7 @@ def load_config(path: Path | None = None) -> Config:
         base_url=base_url,
         download_dir=_expand(general.get("download_dir", "~/Downloads/snuetl")),
         state_dir=_expand(general.get("state_dir", default_state_dir())),
+        browser_engine=engine,
         browser_channel=channel,
         browser_executable_path=executable_path,
         headless=headless_value,
@@ -362,6 +376,7 @@ def save_config(config: Config, path: Path | None = None) -> Path:
         f"setup_complete = {'true' if config.setup_complete else 'false'}\n"
         f"{api_setting}\n"
         "[browser]\n"
+        f"engine = {quoted(config.browser_engine)}\n"
         f"channel = {quoted(channel)}\n"
         f"executable_path = {quoted(executable_path)}\n"
         f"headless = {'true' if config.headless else 'false'}\n"

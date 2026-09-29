@@ -14,7 +14,6 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
-    ipc: host
     read_only: true
     stop_grace_period: 20s
     environment:
@@ -47,7 +46,6 @@ services:
       - /run:size=16m,mode=1777
     security_opt:
       - no-new-privileges:true
-      - seccomp=./docker/seccomp_profile.json
     healthcheck:
       test: ["CMD", "python", "-m", "snuetl.container_runtime", "--healthcheck"]
       interval: 15s

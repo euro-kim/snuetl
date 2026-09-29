@@ -8,10 +8,13 @@ setup_complete = false
 # state_dir = "~/.local/state/snuetl"
 
 [browser]
-# "bundled" uses the Chromium installed by `playwright install chromium`.
-# Set this to "chrome" to use Google Chrome instead.
+# Firefox is the smaller default for Linux and Docker. Set engine to "chromium"
+# only when a site-compatibility issue requires it.
+engine = "firefox"
+# Chromium only: "bundled" uses `playwright install chromium`; "chrome" uses
+# an installed Google Chrome channel.
 channel = "bundled"
-# On Raspberry Pi OS, setup detects /usr/bin/chromium automatically.
+# Raspberry Pi OS can fall back to its system Chromium package automatically.
 # executable_path = "/usr/bin/chromium"
 headless = true
 login_timeout_seconds = 600

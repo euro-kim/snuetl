@@ -89,14 +89,14 @@ def test_doctor_embed_summarizes_checks_without_json() -> None:
             "ready": False,
             "checks": [
                 {"name": "configuration", "ok": True, "detail": "/config.toml"},
-                {"name": "chromium", "ok": False, "detail": "not installed"},
+                {"name": "browser", "ok": False, "detail": "not installed"},
             ],
         }
     )
     text = embed_text(embed)
     assert embed.title == "Diagnostics found issues"
     assert "✅ Configuration" in text
-    assert "⚠️ Chromium" in text
+    assert "⚠️ Browser" in text
     assert "1 passed · 1 required issues" in text
     assert "Run `snuetl setup`" in text
 

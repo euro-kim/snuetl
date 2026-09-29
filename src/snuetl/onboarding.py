@@ -105,7 +105,12 @@ def find_system_chromium() -> Path | None:
 
 
 def _with_system_chromium(config: Config, executable: Path) -> Config:
-    return replace(config, browser_channel=None, browser_executable_path=executable)
+    return replace(
+        config,
+        browser_engine="chromium",
+        browser_channel=None,
+        browser_executable_path=executable,
+    )
 
 
 def _install_raspberry_pi_chromium(config: Config | None = None) -> Path | None:
@@ -125,7 +130,7 @@ def _install_raspberry_pi_chromium(config: Config | None = None) -> Path | None:
     except subprocess.CalledProcessError as exc:
         console.print(
             f"[yellow]![/yellow] Raspberry Pi Chromium installation failed "
-            f"(exit {exc.returncode}); trying Playwright Chromium"
+            f"(exit {exc.returncode}); trying Playwright Firefox"
         )
         return None
     if config is not None:
@@ -170,11 +175,13 @@ def browser_available(config: Config) -> tuple[bool, str]:
                 kwargs["executable_path"] = str(config.browser_executable_path)
             elif config.browser_channel:
                 kwargs["channel"] = config.browser_channel
-            browser = playwright.chromium.launch(**kwargs)
+            browser = getattr(playwright, config.browser_engine).launch(**kwargs)
             browser.close()
         if config.browser_executable_path:
-            return True, f"ready (system Chromium: {config.browser_executable_path})"
-        return True, f"ready (Playwright Chromium; {platform.machine()})"
+            return True, f"ready ({config.browser_engine}: {config.browser_executable_path})"
+        if config.browser_channel:
+            return True, f"ready ({config.browser_channel}; {platform.machine()})"
+        return True, f"ready (Playwright {config.browser_engine.title()}; {platform.machine()})"
     except Exception as exc:
         return False, str(exc).splitlines()[0]
 
@@ -182,23 +189,24 @@ def browser_available(config: Config) -> tuple[bool, str]:
 def ensure_browser(config: Config) -> Config:
     ready, _ = browser_available(config)
     if ready:
-        console.print("[green]✓[/green] Chromium runtime is ready")
+        console.print(f"[green]✓[/green] {config.browser_engine.title()} runtime is ready")
         return config
 
     if config.browser_executable_path:
         console.print(
-            f"[yellow]![/yellow] Chromium at {config.browser_executable_path} is unavailable"
+            f"[yellow]![/yellow] {config.browser_engine.title()} at "
+            f"{config.browser_executable_path} is unavailable"
         )
         config = replace(config, browser_executable_path=None)
 
     if config.browser_channel:
         console.print(
             f"[yellow]![/yellow] Browser channel {config.browser_channel!r} is unavailable; "
-            "switching to Playwright Chromium"
+            f"switching to Playwright {config.browser_engine.title()}"
         )
         config = replace(config, browser_channel=None, browser_executable_path=None)
 
-    system_chromium = find_system_chromium() if is_arm64() else None
+    system_chromium = find_system_chromium() if is_raspberry_pi() else None
     if system_chromium is not None:
         system_config = _with_system_chromium(config, system_chromium)
         ready, _ = browser_available(system_config)
@@ -224,33 +232,43 @@ def ensure_browser(config: Config) -> Config:
                 return system_config
 
     architecture = platform.machine() or "unknown architecture"
-    console.print(f"[cyan]Installing Playwright Chromium for {architecture}…[/cyan]")
+    browser_name = config.browser_engine
+    console.print(
+        f"[cyan]Installing Playwright {browser_name.title()} for {architecture}…[/cyan]"
+    )
     try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", browser_name], check=True
+        )
         record_playwright_browser(config)
     except subprocess.CalledProcessError:
         if is_arm64():
             executable = find_system_chromium()
             if executable is not None:
+                console.print(
+                    f"[yellow]![/yellow] {browser_name.title()} installation failed; "
+                    f"using system Chromium at "
+                    f"[dim]{executable}[/dim]"
+                )
                 return _with_system_chromium(config, executable)
         raise
     ready, reason = browser_available(config)
     if ready:
-        console.print("[green]✓[/green] Chromium installed")
+        console.print(f"[green]✓[/green] {browser_name.title()} installed")
         return config
 
     if platform.system() == "Linux" and _confirm(
-        "Chromium needs Linux system libraries. Install them now (sudo may prompt)?",
+        f"{browser_name.title()} needs Linux system libraries. Install them now (sudo may prompt)?",
         default=True,
     ):
         subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+            [sys.executable, "-m", "playwright", "install", "--with-deps", browser_name],
             check=True,
         )
         ready, reason = browser_available(config)
     if not ready:
-        raise RuntimeError(f"Chromium could not start: {reason}")
-    console.print("[green]✓[/green] Chromium and system libraries are ready")
+        raise RuntimeError(f"{browser_name.title()} could not start: {reason}")
+    console.print(f"[green]✓[/green] {browser_name.title()} and system libraries are ready")
     return config
 
 
@@ -454,7 +472,7 @@ def run_doctor(config: Config, config_path: Path | None = None) -> int:
         architecture_detail += " (ARM64 supported)"
     checks.append(("Architecture", supported_architecture, architecture_detail))
     browser_ok, browser_detail = browser_available(config)
-    checks.append(("Chromium", browser_ok, browser_detail))
+    checks.append(("Browser", browser_ok, browser_detail))
     ffmpeg = shutil.which("ffmpeg")
     checks.append(("FFmpeg", ffmpeg is not None, ffmpeg or "not installed (video pulls limited)"))
     auth_ready = config.profile_dir.exists() and config.auth_state_path.exists()

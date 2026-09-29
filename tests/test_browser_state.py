@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from snuetl import browser
 from snuetl.browser import (
@@ -39,6 +40,41 @@ class _Context:
 
     def add_init_script(self, script):
         self.scripts.append(script)
+
+
+def test_persistent_browser_uses_configured_firefox_without_chromium_flags(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = replace(load_config(tmp_path / "missing.toml"), state_dir=tmp_path / "state")
+    launched: dict[str, object] = {}
+
+    class Context(_Context):
+        pages = []
+
+        @staticmethod
+        def set_default_timeout(_timeout: float) -> None:
+            pass
+
+        @staticmethod
+        def new_page() -> object:
+            return object()
+
+        @staticmethod
+        def close() -> None:
+            pass
+
+    def launch(**kwargs: object) -> Context:
+        launched.update(kwargs)
+        return Context()
+
+    playwright = SimpleNamespace(firefox=SimpleNamespace(launch_persistent_context=launch))
+    monkeypatch.setattr(browser, "_playwright", lambda: lambda: nullcontext(playwright))
+
+    with browser.persistent_browser(config, headless=True):
+        pass
+
+    assert launched["headless"] is True
+    assert "args" not in launched
 
 
 def test_persists_and_restores_session_cookies(tmp_path: Path) -> None:

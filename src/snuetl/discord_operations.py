@@ -126,7 +126,7 @@ def doctor_data(config: Config, config_path: Path | None = None) -> dict[str, ob
             "ok": machine.casefold() in {"x86_64", "amd64", "aarch64", "arm64"},
             "detail": f"{platform.system()} {machine}",
         },
-        {"name": "chromium", "ok": browser_ok, "detail": browser_detail},
+        {"name": "browser", "ok": browser_ok, "detail": browser_detail},
         {
             "name": "ffmpeg",
             "ok": shutil.which("ffmpeg") is not None,

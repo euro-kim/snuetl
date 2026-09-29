@@ -172,6 +172,7 @@ def run_supervisor() -> int:
                     config.base_url,
                     config.download_dir,
                     config.state_dir,
+                    config.browser_engine,
                     config.browser_channel,
                     config.browser_executable_path,
                     config.timeout_seconds,

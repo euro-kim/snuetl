@@ -8,7 +8,7 @@ SNUETL helps users access course content that their own Seoul National Universit
 
 | Directory | Purpose | Usage |
 | --- | --- | --- |
-| [`windows-client/`](windows-client/) | Windows 10/11 x64 tray/dashboard client, on-demand Explorer files, Canvas updates | [Windows instructions](windows-client/README.md) |
+| [`windows-client/`](windows-client/) | Windows 10/11 x64 tray/dashboard client, on-demand Explorer files, Canvas updates | [Download the latest release](https://github.com/euro-kim/snuetl/releases/latest) |
 | [`linux-client/`](linux-client/) | Linux CLI, synchronization, optional bots and systemd scheduling | [Linux instructions](linux-client/README.md) |
 | [`docker/`](docker/) | Container deployment on Linux x86-64 / ARM64 | [Docker instructions](docker/README.md) |
 | [`macos-client/`](macos-client/) | Read-only Codex desktop helper for Apple Silicon / Intel; no Finder sync client | [macOS instructions](macos-client/README.md) |
@@ -17,7 +17,13 @@ The optional [Windows Codex helper](windows-client/codex-helper/README.md) is se
 
 ## Download only the client you need
 
-Use **Git 2.39 or newer** and choose one of the commands below for a new checkout. Partial cloning delays downloading file contents until Git needs them; sparse checkout limits the working files to the selected directories. Root files such as `pyproject.toml`, `README.md`, and `LICENSE` remain available automatically in cone mode. Shared `src/` is required by every client. Git still fetches repository metadata; this is not a separate per-platform repository. See the official [partial clone](https://git-scm.com/docs/git-clone#Documentation/git-clone.txt---filterltfilter-specgt) and [sparse checkout](https://git-scm.com/docs/git-sparse-checkout) documentation.
+For Linux, Docker, or macOS source installs, use **Git 2.39 or newer** and copy the
+matching command block below. Windows users should download the release installer instead.
+Partial cloning delays downloading file contents until Git needs them; sparse checkout
+limits the working files to the selected directories. Root files such as `pyproject.toml`,
+`README.md`, and `LICENSE` remain available automatically in cone mode. Shared `src/` is
+required by every source client. Git still fetches repository metadata; this is not a
+separate per-platform repository. See the official [partial clone](https://git-scm.com/docs/git-clone#Documentation/git-clone.txt---filterltfilter-specgt) and [sparse checkout](https://git-scm.com/docs/git-sparse-checkout) documentation.
 
 **Private repository:** you must have access and authenticate Git using your credential manager. If you use SSH, replace `https://github.com/euro-kim/snuetl.git` below with `git@github.com:euro-kim/snuetl.git`. Do not put access tokens in clone URLs.
 
@@ -43,18 +49,14 @@ git sparse-checkout set --cone src docker
 bash docker/docker-setup.sh
 ```
 
-### Windows client (build from source)
+### Windows client
 
-Run these commands in PowerShell after installing the [Windows build prerequisites](windows-client/README.md#development). The selection includes the tests required by the build and the skill used by the optional Codex helper. It omits Linux, Docker, and macOS platform directories.
-
-```powershell
-git clone --filter=blob:none --sparse --single-branch https://github.com/euro-kim/snuetl.git snuetl-windows
-cd snuetl-windows
-git sparse-checkout set --cone src tests windows-client .agents/skills/snuetl
-pwsh windows-client/build.ps1
-```
-
-If you only want to run the Windows app, use an available Windows installer from Releases instead of a source checkout.
+Download the Windows installer directly from the
+[latest GitHub release](https://github.com/euro-kim/snuetl/releases/latest). Do not clone the
+repository just to install the Windows app. Because this repository is private, GitHub may
+ask you to sign in before it shows the release assets. The
+[Windows README](windows-client/README.md) remains the reference for usage and source
+development.
 
 ### macOS Codex helper (build from source)
 

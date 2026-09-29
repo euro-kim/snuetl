@@ -19,12 +19,12 @@ def test_detects_arm64_aliases(monkeypatch) -> None:
     assert onboarding.is_arm64() is False
 
 
-def test_arm64_uses_available_system_chromium(tmp_path: Path, monkeypatch) -> None:
+def test_raspberry_pi_uses_available_system_chromium(tmp_path: Path, monkeypatch) -> None:
     config = load_config(tmp_path / "missing.toml")
     chromium = Path("/usr/bin/chromium")
     calls = []
     monkeypatch.setattr(onboarding, "is_arm64", lambda: True)
-    monkeypatch.setattr(onboarding, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(onboarding, "is_raspberry_pi", lambda: True)
     monkeypatch.setattr(onboarding, "find_system_chromium", lambda: chromium)
 
     def available(candidate):
@@ -34,6 +34,7 @@ def test_arm64_uses_available_system_chromium(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(onboarding, "browser_available", available)
     selected = onboarding.ensure_browser(config)
     assert selected.browser_executable_path == chromium
+    assert selected.browser_engine == "chromium"
     assert selected.browser_channel is None
     assert len(calls) == 2
 
@@ -59,6 +60,24 @@ def test_raspberry_pi_installer_uses_sudo_and_apt(monkeypatch) -> None:
         (["/usr/bin/sudo", "/usr/bin/apt-get", "update"], True),
         (["/usr/bin/sudo", "/usr/bin/apt-get", "install", "-y", "chromium"], True),
     ]
+
+
+def test_default_setup_installs_only_playwright_firefox(tmp_path: Path, monkeypatch) -> None:
+    config = load_config(tmp_path / "missing.toml")
+    availability = iter(((False, "missing"), (True, "ready")))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(onboarding, "browser_available", lambda _config: next(availability))
+    monkeypatch.setattr(onboarding, "is_raspberry_pi", lambda: False)
+    monkeypatch.setattr(onboarding.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        onboarding.subprocess,
+        "run",
+        lambda command, check: commands.append(command),
+    )
+    monkeypatch.setattr(onboarding, "record_playwright_browser", lambda _config: None)
+
+    assert onboarding.ensure_browser(config) == config
+    assert commands == [[onboarding.sys.executable, "-m", "playwright", "install", "firefox"]]
 
 
 def test_setup_prompts_for_and_secures_video_storage_separately(

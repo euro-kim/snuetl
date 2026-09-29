@@ -317,7 +317,7 @@ def doctor_embed(data: dict[str, object]) -> discord.Embed:
     remediation = {
         "configuration": "Run `snuetl setup` on the host.",
         "architecture": "Use a supported 64-bit x86-64 or ARM64 host.",
-        "chromium": "Run `snuetl setup` to install and validate Chromium.",
+        "browser": "Run `snuetl setup` to install and validate the automation browser.",
         "ffmpeg": "Install FFmpeg, then rerun `/snuetl doctor`.",
         "authentication_state": "Run `/snuetl login` and complete SNU verification.",
         "managed_directory_permissions": "Repair the listed ownership or permissions on the host.",

@@ -5,7 +5,11 @@
 Run the commands below from the **repository root**. The scripts and Compose file moved here; your existing root `.env` and `docker-data/` stay in place. Always use `--project-directory . -f docker/compose.yaml` from the root so existing relative mounts and the Compose project name remain unchanged. Do not move or delete your downloaded data.
 
 
-Docker Compose packages Python, Chromium, browser libraries, and FFmpeg into one image.
+Docker Compose packages Python, Playwright Firefox, its browser libraries, and FFmpeg into
+one image. Firefox replaces Chromium as the default managed browser because
+[Playwright documents a smaller managed download](https://playwright.dev/python/docs/browsers#managing-browser-binaries),
+while preserving SNU SSO and LearningX automation. The application prefers
+its Canvas API token after enrollment, so routine supported commands avoid browser startup.
 The deployment runs as a non-root user, exposes no network ports, and supports native
 Linux x86-64 and ARM64 Docker hosts. Docker Desktop on macOS and Windows is not currently
 an advertised target because its bind-mount ownership model differs from Linux.
@@ -78,6 +82,31 @@ container paths even when the matching host paths differ. Credentials and verifi
 codes are entered through the attached terminal. No browser window or VNC port is exposed.
 After gateway setup completes, the supervisor starts its bot without requiring a
 container restart. Discord and Telegram can run together.
+
+## Browser and API-key responsibilities
+
+The **Canvas API token** is the API key used for bearer-authenticated Canvas requests. It is
+created inside the guided browser session and saved under the mounted state directory; do
+not add it to `.env` or `compose.yaml`.
+
+| Access path | What it runs in the container |
+| --- | --- |
+| Firefox browser driver | SNU ID/password, MFA, and trusted-device enrollment; creating, rotating, and fallback-revoking the API token in Canvas Account Settings; DOM/cookie fallback for catalog or file access; syllabus page rendering; LearningX/LTI/LCMS video resolution. |
+| Canvas API token (API key) | Preferred course/file/article/assignment/quiz/module catalogs and ordinary downloads; required live personal views including upcoming work, submissions, grades, calendar, discussions, activity, feedback, and dashboard. |
+| Local SQLite only | Status/history and cached `sql`/`query --no-refresh` reads. |
+
+`courses`, `files`, `articles`, `assignments`, `quizzes`, `refresh`, `sync`, and most pull
+operations try the API token first and launch Firefox only for a supported fallback. Live
+personal-data commands have no browser fallback. Video pulls still use the browser provider
+flow even when their module metadata came from the API. Discord and Telegram invoke these
+same paths; they do not introduce a separate authentication method. See the Linux guide's
+[per-command access matrix](../linux-client/README.md#personal-token-and-browser-driver-access)
+for the complete breakdown.
+
+The container remains headless and exposes no browser or VNC port. A Chromium compatibility
+mode remains available for debugging an eTL regression, but it requires rebuilding a custom
+image that installs Chromium and setting `engine = "chromium"` in the mounted `config.toml`;
+the maintained Dockerfile installs Firefox only.
 
 ## Persistent path model
 
@@ -203,11 +232,10 @@ Never share a config directory, state directory, or writable download root betwe
 instances. Changing only the Compose project name is insufficient because
 `container_name` and the bind-mount paths are explicit.
 
-The Compose security profile is based on Playwright's
-[official seccomp profile](https://github.com/microsoft/playwright/blob/main/utils/docker/seccomp_profile.json),
-which extends Docker's default policy for Chromium user namespaces. The container also
-uses Docker init handling and host IPC as recommended by
-[Playwright's Docker guidance](https://playwright.dev/python/docs/docker).
+The Compose service uses Docker's default seccomp policy, `no-new-privileges`, a read-only
+root filesystem, Docker init handling, and a non-root application user. Firefox does not
+need the Chromium-specific host IPC and user-namespace seccomp exceptions that the previous
+deployment requested.
 
 
 ## Build context

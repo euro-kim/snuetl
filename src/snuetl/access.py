@@ -1,4 +1,4 @@
-"""Prefer personal Canvas access for file bytes, opening Chromium only when needed."""
+"""Prefer personal Canvas access for file bytes, opening a browser only when needed."""
 
 from __future__ import annotations
 

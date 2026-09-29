@@ -55,7 +55,7 @@ def _playwright() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional runtime
         raise RuntimeError(
             "Playwright is not installed. Install the package and run "
-            "'playwright install chromium'."
+            "'playwright install firefox'."
         ) from exc
     return sync_playwright
 
@@ -69,17 +69,19 @@ def persistent_browser(config: Config, *, headless: bool) -> Iterator[tuple[Any,
             "user_data_dir": str(config.profile_dir),
             "headless": headless,
             "accept_downloads": False,
-            "args": [
+        }
+        if config.browser_engine == "chromium":
+            kwargs["args"] = [
                 "--disable-features=PasswordManagerOnboarding",
                 "--disable-save-password-bubble",
                 "--no-default-browser-check",
-            ],
-        }
+            ]
         if config.browser_executable_path:
             kwargs["executable_path"] = str(config.browser_executable_path)
         elif config.browser_channel:
             kwargs["channel"] = config.browser_channel
-        context = playwright.chromium.launch_persistent_context(**kwargs)
+        browser_type = getattr(playwright, config.browser_engine)
+        context = browser_type.launch_persistent_context(**kwargs)
         _restore_auth_state(context, config)
         context.set_default_timeout(config.timeout_seconds * 1000)
         page = context.pages[0] if context.pages else context.new_page()
@@ -123,7 +125,7 @@ def _restore_auth_state(context: Any, config: Config) -> None:
 
 
 def persist_auth_state(context: Any, config: Config, landing_url: str) -> None:
-    """Persist session cookies that Chromium normally drops when it exits."""
+    """Persist session cookies that browsers normally drop when they exit."""
     state = context.storage_state()
     _atomic_private_json(config.auth_state_path, state)
     parts = urlsplit(landing_url)

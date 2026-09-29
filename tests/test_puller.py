@@ -280,11 +280,6 @@ def test_selected_video_reaches_downloader_and_reports_progress(tmp_path, monkey
     monkeypatch.setattr(puller, "ensure_authenticated_page", lambda *_args: None)
     monkeypatch.setattr(
         puller,
-        "AuthenticatedDownloader",
-        lambda *_args, **_kwargs: nullcontext(object()),
-    )
-    monkeypatch.setattr(
-        puller,
         "_dom_media_candidates",
         lambda _page: ([("https://media.test/video.mp4", "https://lcms.snu.ac.kr/")], []),
     )

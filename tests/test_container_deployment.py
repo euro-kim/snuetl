@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -26,9 +25,8 @@ def test_compose_keeps_one_named_interactive_hardened_container() -> None:
     assert service["image"] == "${SNUETL_IMAGE:-snuetl:local}"
     assert service["build"]["context"] == "."
     assert (ROOT / service["build"]["dockerfile"]).is_file()
-    assert "seccomp=./docker/seccomp_profile.json" in service["security_opt"]
     assert "SNUETL_SOURCE_REVISION" in service["build"]["args"]
-    assert service["ipc"] == "host"
+    assert "ipc" not in service
     assert "ports" not in service
     assert "privileged" not in service
     assert "no-new-privileges:true" in service["security_opt"]
@@ -431,7 +429,7 @@ def test_container_build_installs_runtime_and_drops_root() -> None:
     dockerfile = (DOCKER / "Dockerfile").read_text(encoding="utf-8")
 
     assert "FROM python:3.12-bookworm" in dockerfile
-    assert "playwright install --with-deps chromium" in dockerfile
+    assert "playwright install --with-deps firefox" in dockerfile
     assert "apt-get install --yes --no-install-recommends ffmpeg" in dockerfile
     assert "USER snuetl" in dockerfile
     assert 'org.opencontainers.image.revision="${SNUETL_SOURCE_REVISION}"' in dockerfile
@@ -457,17 +455,3 @@ def test_env_template_contains_only_non_secret_deployment_settings() -> None:
         "SNUETL_VIDEO_DIR",
     }
     assert not any("password" in key.casefold() or "token" in key.casefold() for key in values)
-
-
-def test_playwright_seccomp_profile_supports_x86_and_arm_user_namespaces() -> None:
-    profile = json.loads(
-        (DOCKER / "seccomp_profile.json").read_text(encoding="utf-8")
-    )
-
-    architectures = {entry["architecture"] for entry in profile["archMap"]}
-    assert {"SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"} <= architectures
-    assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
-    assert any(
-        {"clone", "setns", "unshare"} <= set(entry["names"]) and entry["action"] == "SCMP_ACT_ALLOW"
-        for entry in profile["syscalls"]
-    )

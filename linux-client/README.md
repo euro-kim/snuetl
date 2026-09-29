@@ -10,6 +10,7 @@ For container deployment, use the [Docker guide](../docker/README.md). For deskt
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Browser and API-key responsibilities](#browser-and-api-key-responsibilities)
 - [Raspberry Pi and Linux ARM64](#raspberry-pi-and-linux-arm64)
 - [Authentication and secrets](#authentication-and-secrets)
 - [Local storage](#local-storage)
@@ -31,13 +32,16 @@ For container deployment, use the [Docker guide](../docker/README.md). For deskt
 | --- | --- |
 | Operating system | 64-bit Linux (x86-64 or ARM64) |
 | Python | 3.11 or newer |
-| Browser | Playwright Chromium, Google Chrome, or system Chromium on Raspberry Pi OS |
+| Browser | Playwright Firefox (default); Chromium compatibility fallback |
 | Deployment runtime | Docker Compose v2, or systemd user services for a native install |
 | Account | An authorized SNU eTL account |
 
-Desktop operation is not required. Setup detects display availability and uses headless
-Chromium on servers. The browser installation step may request `sudo` to install required
-operating-system packages; the application itself runs as an unprivileged user.
+Desktop operation is not required. Setup detects display availability and runs Firefox
+headlessly on servers. The browser installation step may request `sudo` to install required
+operating-system packages; the application itself runs as an unprivileged user. Firefox is
+the default because its [Playwright-managed download is smaller than Chromium](https://playwright.dev/python/docs/browsers#managing-browser-binaries)
+while retaining the automation needed by SNU SSO, Account Settings, and LearningX. Once enrollment creates
+a Canvas API token, routine supported operations prefer that token and do not launch Firefox.
 
 
 ## Quick start
@@ -60,7 +64,7 @@ call the stable `snuetl ... --json --no-input` interface. Direct installation wi
 
 Running bare `snuetl` on a fresh machine opens a guided terminal setup. It:
 
-- checks Playwright and automatically downloads its managed Chromium;
+- checks Playwright and automatically downloads its managed Firefox;
 - offers to install missing Ubuntu browser libraries (sudo may prompt);
 - asks where course files should be stored;
 - prompts privately for SNU ID and password;
@@ -76,7 +80,7 @@ Setup does not prompt to create an automatic synchronization schedule.
 
 No configuration file needs to be created manually. Re-run the wizard later with
 `snuetl setup`, `snuetl onboard`, or `snuetl configure`. On a server without a
-display, the same wizard automatically uses headless Chromium; `snuetl setup --headed`
+display, the same wizard automatically uses headless Firefox; `snuetl setup --headed`
 and `--headless` are available when an explicit mode is needed.
 
 For development from a checkout, add the shared tests and create a virtual environment:
@@ -89,15 +93,42 @@ python -m pip install -e '.[test]'
 snuetl
 ```
 
+## Browser and API-key responsibilities
+
+SNUETL calls the Canvas personal access token an **API token**; it is the API key used in
+`Authorization: Bearer ...` requests. The setup wizard creates it for you and stores it in
+an owner-only local file. You do not paste the token into a shell, TOML file, or Docker
+environment variable.
+
+| Access path | What it runs |
+| --- | --- |
+| Firefox browser driver | SNU ID/password and MFA login; trusted-device cookies; creating, rotating, and fallback-revoking the API token in Canvas Account Settings; DOM/cookie fallback when a catalog endpoint or file rejects token access; syllabus page rendering; LearningX/LTI/LCMS video resolution. |
+| Canvas API token (API key) | The preferred path for course, file, article, assignment, quiz, and module catalogs; normal file/article/syllabus metadata and downloads; all live personal views such as upcoming work, submissions, grades, calendar, discussions, activity, feedback, and dashboard. |
+| Local SQLite only | Cached `sql`/`query` operations with `--no-refresh`; status/history reads. No browser or API request is made. |
+
+In practical terms, `courses`, `files`, `articles`, `assignments`, `quizzes`, `refresh`,
+`sync`, and most pulls try the API token first and start the browser only if a supported
+fallback is needed. Live personal-data commands require the API token and never fall back
+to browser cookies. Video pulls still need the browser provider flow even when module
+metadata came from the API. The detailed per-command matrix is under
+[Personal token and browser-driver access](#personal-token-and-browser-driver-access).
+
+Firefox is the supported default for new Linux installs. If an eTL change causes a
+Firefox-specific compatibility problem, set `engine = "chromium"` under `[browser]` in
+`~/.config/snuetl/config.toml`, leave `channel = "bundled"`, and run `snuetl setup` again.
+Raspberry Pi OS uses its packaged Chromium as the first choice for ARM compatibility.
+
 
 ## Raspberry Pi and Linux ARM64
 
 `snuetl` supports 64-bit ARM Linux (`aarch64`/`arm64`) with Python 3.11 or newer.
 The setup wizard detects the architecture and validates a real headless browser launch.
-On supported ARM64 Ubuntu and Debian releases it can install Playwright's native ARM64
-Chromium. On 64-bit Raspberry Pi OS it first uses an existing `chromium` package, or
+On supported ARM64 Ubuntu and Debian releases it installs Playwright Firefox. On 64-bit
+Raspberry Pi OS it first uses an existing `chromium` package, or
 offers to install it through `apt-get` when absent. The selected executable is saved as
-`browser.executable_path`; authentication and scheduled runs then use that same binary.
+`browser.engine` plus `browser.executable_path`; authentication and scheduled runs then use
+that same binary. Generic ARM64 hosts also fall back to system Chromium if managed Firefox
+installation fails.
 
 Typical Raspberry Pi installation is unchanged:
 
@@ -297,22 +328,22 @@ snuetl grades --save
 snuetl sql --execute "SELECT course_id, data_json FROM canvas_snapshots WHERE command = 'grades'"
 ```
 
-### Personal token and browser-cookie access
+### Personal token and browser-driver access
 
-| Feature or command | Personal Canvas token | Browser cookies | Relationship and local output |
+| Feature or command | Canvas API token (API key) | Firefox browser driver | Relationship and local output |
 | --- | --- | --- | --- |
-| `setup`, `login`, `api setup`, `api rotate` | Created or replaced through Account Settings | Required for interactive SNU login and token creation | Browser workflow establishes access. |
-| `api status` | Validates a saved token with the Canvas profile API | None | Reports token health without printing the secret. |
+| `setup`, `login`, `api setup`, `api rotate` | Created or replaced through Account Settings | Required for SNU login, MFA, trusted-device enrollment, and token creation | Browser workflow establishes access. |
+| `api status` | Validates a saved token with the Canvas profile API | Not used | Reports token health without printing the secret. |
 | `courses`, `files`, `articles`, `assignments`, `quizzes` | Tried first for the complete Canvas catalog | Canvas API with cookies, then page discovery when token access fails | Successful results update the SQLite catalog. |
 | `refresh`, `sql`, `query` | Tried first for all catalog metadata | Canvas API with cookies, then page discovery if token refresh fails | Entering SQL refreshes the catalog automatically unless `--no-refresh` is set. |
 | `sync`, `pull files` | Tried first for catalog metadata and each file download | Used for discovery or individual downloads when token access fails | Downloaded files and tracking rows are local. |
 | `pull articles` | Tried first for article bodies and linked public assets | Used if article discovery or an asset request needs browser cookies | Writes local Markdown and localized assets. |
 | `pull syllabus` | Tried first for course metadata and uploaded syllabus files | Used for embedded syllabus content and PDF rendering; also backs up file downloads | Writes Markdown, PDF when rendering succeeds, uploaded files, and a manifest. |
 | `pull videos` | Tried first for module metadata and uploaded media files | Used to resolve LearningX, LTI, and LCMS player media | Video streaming still needs the browser provider flow; saves media and captions. |
-| `upcoming`, `missing`, `submissions`, `grades`, `calendar`, `discussions`, `activity`, `announcements`, `modules`, `feedback`, `dashboard` | Required for live personal Canvas data | No browser-cookie fallback | `--save` writes Markdown and queryable `canvas_snapshots` rows; otherwise results are not stored. |
-| `sql`, `query` saved personal scopes | Refreshes scopes previously saved with `--save` | No browser-cookie fallback for personal scopes | SQL rows update on entry; Markdown snapshots update only when `--save` is run again. `--no-refresh` uses cached rows. |
+| `upcoming`, `missing`, `submissions`, `grades`, `calendar`, `discussions`, `activity`, `announcements`, `modules`, `feedback`, `dashboard` | Required for live personal Canvas data | No browser fallback | `--save` writes Markdown and queryable `canvas_snapshots` rows; otherwise results are not stored. |
+| `sql`, `query` saved personal scopes | Refreshes scopes previously saved with `--save` | No browser fallback for personal scopes | SQL rows update on entry; Markdown snapshots update only when `--save` is run again. `--no-refresh` uses cached rows. |
 | Discord catalog, refresh, sync, and pull | Uses the corresponding terminal command's token-first path | Same fallback as the corresponding terminal command | Remote jobs use the server's own token and browser profile. |
-| Telegram live views and digest; Telegram sync | Live views require the token; sync prefers it | Live views have no cookie fallback; sync uses browser cookies when needed | Telegram does not persist personal snapshots unless a local `--save` command is run. |
+| Telegram live views and digest; Telegram sync | Live views require the token; sync prefers it | Live views have no browser fallback; sync uses browser cookies when needed | Telegram does not persist personal snapshots unless a local `--save` command is run. |
 | `logout` | Tries Canvas API token revocation first | Uses Account Settings if API revocation fails | Removes local authentication after remote revocation. |
 
 The token is sent only to the configured Canvas origin. A file or asset URL on another
@@ -857,7 +888,7 @@ snuetl uninstall --yes --json --no-input
 Destructive choices are explicit: `--delete-files` removes only paths tracked in the
 database under the configured default or routed roots; `--purge-config`,
 `--purge-state`, or `--purge` remove private app data. `--remove-shared-deps` only
-considers Chromium or FFmpeg installations recorded as installed by the setup wizard. It
+considers Playwright browser or FFmpeg installations recorded as installed by the setup wizard. It
 never runs broad directory deletion or removes unrelated files.
 
 

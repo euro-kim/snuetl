@@ -42,8 +42,8 @@ from .directory_manager import (
     validate_managed_root,
 )
 from .errors import AuthenticationRequired, DiscoveryError
-from .logging_utils import configure_logging, redact
 from .live_snapshot import refresh_saved_snapshots, save_live_snapshot
+from .logging_utils import configure_logging, redact
 from .onboarding import (
     browser_available,
     display_available,
@@ -458,7 +458,7 @@ def _doctor_data(config: Config, config_path: Path | None) -> dict[str, object]:
             "ok": machine.casefold() in {"x86_64", "amd64", "aarch64", "arm64"},
             "detail": f"{platform.system()} {machine}",
         },
-        {"name": "chromium", "ok": browser_ok, "detail": browser_detail},
+        {"name": "browser", "ok": browser_ok, "detail": browser_detail},
         {
             "name": "ffmpeg",
             "ok": shutil.which("ffmpeg") is not None,
@@ -1195,7 +1195,7 @@ def main(argv: list[str] | None = None) -> int:
             mode = args.mode
             if mode is None and not (args.no_input or args.json):
                 enabled = Confirm.ask(
-                    "Use headless Chromium by default?",
+                    "Use headless browser automation by default?",
                     default=config.headless,
                 )
                 mode = "on" if enabled else "off"

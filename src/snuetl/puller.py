@@ -470,15 +470,14 @@ def _pull_files(
         summary.skipped += len(plan.files)
         return
     sync_summary = SyncSummary(courses=len(plan.courses))
-    with StateStore(config.database_path) as store:
-        with PreferredDownloader(
-            config, session_factory=lambda: _authenticated_session(config)
-        ) as downloader:
-            pull_config = replace(config, download_dir=root)
-            for course, remote in plan.files:
-                if progress is not None:
-                    progress(f"Checking {course.display_name}: {remote.name}")
-                sync_file(pull_config, store, downloader, course, remote, sync_summary)
+    with StateStore(config.database_path) as store, PreferredDownloader(
+        config, session_factory=lambda: _authenticated_session(config)
+    ) as downloader:
+        pull_config = replace(config, download_dir=root)
+        for course, remote in plan.files:
+            if progress is not None:
+                progress(f"Checking {course.display_name}: {remote.name}")
+            sync_file(pull_config, store, downloader, course, remote, sync_summary)
     summary.created += sync_summary.downloaded
     summary.updated += sync_summary.updated
     summary.unchanged += sync_summary.unchanged
@@ -506,7 +505,7 @@ def _pull_syllabi(
     syllabus_files: dict[str, list[RemoteFile]] = {}
     for course, remote in plan.syllabus_files:
         syllabus_files.setdefault(course.remote_id, []).append(remote)
-    with PreferredAssetContext(
+    with PreferredAssetContext(  # noqa: SIM117 - downloader depends on the outer context
         config, session_factory=lambda: _authenticated_session(config)
     ) as context, StateStore(config.database_path) as store:
         with PreferredDownloader(config, asset_context=context) as downloader:
@@ -732,6 +731,7 @@ def _pull_videos(
 
     with _authenticated_session(config) as session, StateStore(config.database_path) as store:
         context, page = session.context, session.page
+        user_agent = page.evaluate("navigator.userAgent")
         _clear_stale_learningx_cookies(context)
         cookie_file: Path | None = None
         try:

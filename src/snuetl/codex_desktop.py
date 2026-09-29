@@ -146,6 +146,7 @@ def _config() -> Config:
         base_url=LOGIN_URL,
         download_dir=data_dir(),
         state_dir=data_dir(),
+        browser_engine="chromium",
         browser_channel=None,
         browser_executable_path=None,
         headless=False,

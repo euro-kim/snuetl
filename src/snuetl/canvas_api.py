@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
+import random
 import re
 import time as monotonic_time
-import random
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -191,7 +191,8 @@ class CanvasClient:
                     next_url = match.group(1)
                     break
         if cacheable:
-            if len(_COURSE_CACHE) > 32: _COURSE_CACHE.clear()
+            if len(_COURSE_CACHE) > 32:
+                _COURSE_CACHE.clear()
             _COURSE_CACHE[cache_key] = (monotonic_time.monotonic(), values)
         return values
 

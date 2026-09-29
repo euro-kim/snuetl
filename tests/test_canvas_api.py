@@ -159,14 +159,23 @@ def test_token_creation_accepts_guarded_canvas_json(
 
 def test_rate_limit_honors_retry_after_without_retry_storm(tmp_path, monkeypatch):
     config, token = _config_and_token(tmp_path)
-    calls=[]; waits=[]
+    calls = []
+    waits = []
+
     def respond(request):
         calls.append(request)
-        return httpx.Response(429,headers={'Retry-After':'3'}) if len(calls)<3 else httpx.Response(200,json={'id':42})
-    original=httpx.Client
-    monkeypatch.setattr(canvas_api.httpx,'Client',lambda **kwargs: original(transport=httpx.MockTransport(respond),**kwargs))
-    monkeypatch.setattr(canvas_api.monotonic_time,'sleep',waits.append)
-    monkeypatch.setattr(canvas_api.random,'uniform',lambda *_:0)
-    with canvas_api.CanvasClient(config,token) as client:
-        assert client.request('GET','/api/v1/users/self/profile')['id']==42
-    assert waits==[3,3] and len(calls)==3
+        if len(calls) < 3:
+            return httpx.Response(429, headers={"Retry-After": "3"})
+        return httpx.Response(200, json={"id": 42})
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        canvas_api.httpx,
+        "Client",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    monkeypatch.setattr(canvas_api.monotonic_time, "sleep", waits.append)
+    monkeypatch.setattr(canvas_api.random, "uniform", lambda *_: 0)
+    with canvas_api.CanvasClient(config, token) as client:
+        assert client.request("GET", "/api/v1/users/self/profile")["id"] == 42
+    assert waits == [3, 3] and len(calls) == 3

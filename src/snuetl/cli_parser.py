@@ -43,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_display_mode(command: argparse.ArgumentParser) -> None:
         group = command.add_mutually_exclusive_group()
-        group.add_argument("--headless", action="store_true", help="do not show Chromium")
-        group.add_argument("--headed", action="store_true", help="show Chromium")
+        group.add_argument("--headless", action="store_true", help="do not show the browser")
+        group.add_argument("--headed", action="store_true", help="show the browser")
 
     for name in ("setup", "onboard", "configure"):
         command = subparsers.add_parser(name, help="run guided setup")
@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         "mode",
         nargs="?",
         choices=("on", "off"),
-        help="use headless (on) or visible (off) Chromium by default",
+        help="use headless (on) or visible (off) browser automation by default",
     )
     add_agent_flags(headless)
 
@@ -277,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument(
         "--remove-shared-deps",
         action="store_true",
-        help="remove Chromium/FFmpeg only when recorded as installed by snuetl",
+        help="remove Playwright browser/FFmpeg only when recorded as installed by snuetl",
     )
     add_agent_flags(uninstall)
 
