@@ -29,7 +29,7 @@ public sealed class GitHubReleases(string repository, HttpClient? client = null,
             request.Headers.Accept.ParseAdd(binary ? "application/octet-stream" : "application/vnd.github+json");
             request.Headers.Add("X-GitHub-Api-Version","2022-11-28");
         }
-        request.Headers.UserAgent.ParseAdd("SNUETL-Windows/0.9.5");
+        request.Headers.UserAgent.ParseAdd("SNUETL-Windows/0.9.6");
         var response = await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         { response.Dispose(); throw new IOException($"GitHub releases for {Repository} are unavailable. For a private repository, save a GitHub token with Contents: read access in Settings."); }

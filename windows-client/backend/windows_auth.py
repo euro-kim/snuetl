@@ -89,12 +89,60 @@ def _load_token() -> CanvasToken | None:
     return CanvasToken(secret, metadata.origin, metadata.user_id, metadata.token_id, metadata.expires_at) if secret else None
 
 
+def _windows_credentials() -> list[tuple[str, str, int]]:
+    # pywin32-ctypes (used by keyring) does not expose CredEnumerate.
+    import ctypes
+    from ctypes import wintypes
+    class Credential(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD),
+                    ("TargetName", wintypes.LPWSTR), ("Comment", wintypes.LPWSTR),
+                    ("LastWritten", wintypes.FILETIME), ("CredentialBlobSize", wintypes.DWORD),
+                    ("CredentialBlob", ctypes.c_void_p), ("Persist", wintypes.DWORD),
+                    ("AttributeCount", wintypes.DWORD), ("Attributes", ctypes.c_void_p),
+                    ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    pointer = ctypes.POINTER(ctypes.POINTER(Credential))()
+    count = wintypes.DWORD()
+    api.CredEnumerateW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                  ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(type(pointer))]
+    api.CredEnumerateW.restype = wintypes.BOOL
+    api.CredFree.argtypes = [ctypes.c_void_p]
+    api.CredFree.restype = None
+    if not api.CredEnumerateW(None, 0, ctypes.byref(count), ctypes.byref(pointer)):
+        error = ctypes.get_last_error()
+        if error == 1168:
+            return []
+        raise ctypes.WinError(error)
+    try:
+        return [(pointer[i].contents.TargetName, pointer[i].contents.UserName,
+                 pointer[i].contents.Type) for i in range(count.value)]
+    finally:
+        api.CredFree(pointer)
+
+
+def _cleanup_credentials(keep: CanvasToken | None = None) -> None:
+    """Remove this client's credentials, including keyring's upgrade leftovers."""
+    if sys.platform != "win32":
+        return
+    from keyring.backends.Windows import win32cred
+    for target, username, credential_type in _windows_credentials():
+        if credential_type != win32cred.CRED_TYPE_GENERIC:
+            continue
+        if target != SERVICE and not target.endswith("@" + SERVICE):
+            continue
+        if keep is not None and target == SERVICE and username == _account(keep):
+            continue
+        win32cred.CredDelete(Type=win32cred.CRED_TYPE_GENERIC, TargetName=target)
+
+
 def _save_token(token: CanvasToken) -> None:
     path = _metadata_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(".canvas-account.json.tmp")
+    previous_secret = None
     try:
         backend = _credential_backend()
+        previous_secret = backend.get_password(SERVICE, _account(token))
         backend.set_password(SERVICE, _account(token), token.value)
         metadata = asdict(token)
         metadata.pop("value")
@@ -105,8 +153,18 @@ def _save_token(token: CanvasToken) -> None:
     except Exception as exc:
         temporary.unlink(missing_ok=True)
         with suppress(Exception):
-            _credential_backend().delete_password(SERVICE, _account(token))
+            if previous_secret is not None:
+                _credential_backend().set_password(SERVICE, _account(token), previous_secret)
+            else:
+                _credential_backend().delete_password(SERVICE, _account(token))
         raise DesktopError("CREDENTIAL_STORE", "Could not save the Canvas token securely") from exc
+    try:
+        _cleanup_credentials(keep=token)
+    except Exception as exc:
+        # The new key and metadata are committed. Never delete the working key
+        # because cleanup failed; retry on the next replacement or disconnect.
+        raise DesktopError("CREDENTIAL_CLEANUP", "The new key is saved, but Windows could not remove older SNUETL keys. Retry connecting to finish cleanup.") from exc
+
 
 
 def _delete_token(token: CanvasToken) -> None:
@@ -114,6 +172,7 @@ def _delete_token(token: CanvasToken) -> None:
         _credential_backend().delete_password(SERVICE, _account(token))
     except Exception as exc:
         raise DesktopError("CREDENTIAL_STORE", "Could not remove the saved Canvas token") from exc
+    _cleanup_credentials()
     _metadata_path().unlink(missing_ok=True)
 
 

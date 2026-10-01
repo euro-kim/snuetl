@@ -108,7 +108,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         if (dialog.ShowDialog() == Forms.DialogResult.OK) await RunAsync(() => controller.ChangeRootAsync(dialog.SelectedPath), "Setting up your folder…", "Sync folder saved.");
     }
     private async void DefaultIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("Default"), "Updating your icon…", "Default icon applied to Explorer and the tray.");
-    private async void SnuIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("SNU"), "Downloading the SNU logo…", "SNU logo applied to Explorer and the tray.");
+    private async void SnuIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("SNU"), "Applying the SNU logo…", "SNU logo applied to Explorer and the tray.");
     private async void CustomIcon_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Choose your SNUETL icon", Filter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.ico", CheckFileExists = true };

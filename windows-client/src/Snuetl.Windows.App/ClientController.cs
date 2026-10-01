@@ -51,12 +51,12 @@ public sealed class ClientController : IAsyncDisposable
     public async Task StartAsync()
     {
         // Configure per-user startup even when first-run authentication is postponed.
-        if (Settings.IconChoice == "SNU" && Settings.IconStyleVersion < 2 && File.Exists(Branding.IconPath))
+        if (Settings.IconChoice == "SNU" && (Settings.IconStyleVersion < 2 || !File.Exists(Branding.IconPath)))
         {
             try { await Branding.ApplyAsync("SNU"); Settings = Settings with { IconStyleVersion = 2 }; }
             catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException) { Activity.Add("SNU icon update postponed until online"); }
         }
-        else if (!File.Exists(Branding.IconPath)) await Branding.ApplyAsync("Default");
+        else if (!File.Exists(Branding.IconPath)) await Branding.ApplyAsync(Settings.IconChoice == "Custom" ? "Default" : Settings.IconChoice);
         if (Settings.LastRunVersion != Branding.Version) Activity.Add($"Updated to version {Branding.Version}");
         Settings = Settings with { LastRunVersion = Branding.Version };
         store.Save(Settings);

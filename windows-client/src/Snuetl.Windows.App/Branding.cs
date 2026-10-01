@@ -31,9 +31,11 @@ internal static class Branding
             bytes = await File.ReadAllBytesAsync(Path.Combine(IconDirectory, "snu-original.png"));
         else if (choice == "SNU")
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30), MaxResponseContentBufferSize = 10 * 1024 * 1024 };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd($"SNUETL/{Version}");
-            bytes = await http.GetByteArrayAsync(SnuLogoUrl);
+            using var logo = typeof(Branding).Assembly.GetManifestResourceStream("Snuetl.Windows.Assets.snu-logo.png")
+                ?? throw new IOException("The bundled SNU logo is unavailable. Repair the installation.");
+            using var buffer = new MemoryStream();
+            await logo.CopyToAsync(buffer);
+            bytes = buffer.ToArray();
         }
         else if (choice == "Custom")
         {

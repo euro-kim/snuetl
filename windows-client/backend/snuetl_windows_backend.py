@@ -112,6 +112,8 @@ def auth_status(verify: bool = False) -> dict[str, Any]:
     result = codex_desktop._status(verify=verify)
     if verify and result.get("valid") is False:
         result["ready"] = False
+    if verify and result.get("valid") is True:
+        codex_desktop._cleanup_credentials(keep=codex_desktop._load_token())
     if result.get("configured"):
         metadata = codex_desktop._load_metadata()
         if metadata:
@@ -162,7 +164,7 @@ def auth_manual(value: str, origin: str = "https://myetl.snu.ac.kr") -> dict[str
     # Accept a copied HTTP header without storing or sending a duplicate prefix.
     token_value = re.sub(r"^(?:Authorization:\s*)?Bearer\s+", "", token_value, flags=re.IGNORECASE).strip()
     if not TOKEN_PATTERN.fullmatch(token_value):
-        raise BackendError("INVALID_TOKEN", "Paste the complete Canvas token, such as 1~ followed by its long secret. Keep the numeric prefix and ~ exactly as issued; do not invent or append characters. Bearer is added automatically.")
+        raise BackendError("INVALID_TOKEN", "Paste the complete Canvas token copied from SNU eTL. SNUETL handles the authorization header automatically. If the copied key is incomplete, copy it again from eTL.")
     preferred = _validate_origin(origin)
     origins = [
         preferred,
@@ -215,6 +217,9 @@ def auth_disconnect() -> dict[str, Any]:
     token = codex_desktop._load_token()
     if token is not None:
         codex_desktop._delete_token(token)
+    else:
+        codex_desktop._cleanup_credentials()
+        codex_desktop._metadata_path().unlink(missing_ok=True)
     # Local disconnect never opens a browser; revoke tokens explicitly in Canvas.
     for name in ("academic.json", "manifest.json"):
         (data_dir() / name).unlink(missing_ok=True)

@@ -4,8 +4,8 @@ namespace Snuetl.Windows;
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 3;
-    public string IconChoice { get; init; } = "Default";
+    public int SchemaVersion { get; init; } = 4;
+    public string IconChoice { get; init; } = "SNU";
     public int IconStyleVersion { get; init; }
     public NotificationPreferences Notifications { get; init; } = new();
     public bool NotificationSetupCompleted { get; init; }

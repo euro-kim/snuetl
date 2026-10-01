@@ -13,4 +13,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/snu-logo.png" />
+  </ItemGroup>
 </Project>

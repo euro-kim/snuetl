@@ -1,0 +1,1 @@
+The bundled `snu-logo.png` is the Seoul National University emblem downloaded from https://www.snu.ac.kr/webdata/uploads/kor/image/2022/09/snu_ui_download.png on 2026-10-01. It is used as the default local client icon. University identity artwork is not covered by this repository's MIT license; the client remains unofficial.

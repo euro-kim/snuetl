@@ -25,7 +25,9 @@ public sealed class SettingsStore
         try
         {
             var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions) ?? new AppSettings();
-            return settings with { RefreshMinutes = Math.Clamp(settings.RefreshMinutes, 1, 1440) };
+            return settings with { RefreshMinutes = Math.Clamp(settings.RefreshMinutes, 1, 1440),
+                SchemaVersion = 4, IconChoice = settings.SchemaVersion < 4 && settings.IconChoice == "Default" ? "SNU" : settings.IconChoice,
+                IconStyleVersion = settings.SchemaVersion < 4 && settings.IconChoice == "Default" ? 0 : settings.IconStyleVersion };
         }
         catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {

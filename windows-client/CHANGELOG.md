@@ -1,5 +1,13 @@
 # Windows client releases
 
+## 0.9.6
+
+- Remove historical Windows Credential Manager entries when replacing or disconnecting an eTL key, including entries left behind by upgrades.
+- Use the same secure replacement flow for manual setup and automatic sign-in.
+- Revoke older eTL keys labeled `snuetl-windows` before automatic key creation; unrelated integrations remain available.
+- Simplify manual setup to copying the complete key from eTL. Authorization headers are added automatically.
+- Bundle the SNU logo for offline use and migrate the previous default icon on upgrade.
+
 ## 0.9.5
 
 - Show available updates in a mini-panel banner that opens the update settings directly, and clear stale update notices after an upgrade.

@@ -59,10 +59,10 @@
                                     <Button Content="Use automatic login (downloads component if needed)" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
                                     <Expander IsExpanded="True" Header="Use a Canvas API token" Margin="0,16,0,0">
                                         <StackPanel Margin="0,12,0,0">
-                                            <TextBlock Text="Paste the complete token from Canvas Account Settings. It looks like 1~ followed by a long string of letters, numbers, underscores or hyphens. Keep the number and ~ exactly as shown. Do not add a prefix or suffix; SNUETL adds Bearer automatically." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,10"/>
+                                            <TextBlock Text="Create an access token in SNU eTL Account Settings, copy the complete key, and paste it below. SNUETL handles the authorization header automatically and securely replaces previously saved keys." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,10"/>
                                             <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="Canvas API token"/>
                                             <WrapPanel Margin="0,12,0,0">
-                                                <Button Content="Save token" Click="ManualConnect_Click"/>
+                                                <Button Content="Connect account" Click="ManualConnect_Click"/>
                                                 <Button Content="Open token settings" Click="TokenSettings_Click"/>
                                             </WrapPanel>
                                         </StackPanel>
@@ -148,7 +148,7 @@
                                     <Button Content="Use SNU logo" Click="SnuIcon_Click" Margin="0,0,8,8"/>
                                     <Button Content="Choose image…" Style="{StaticResource PrimaryButton}" Click="CustomIcon_Click" Margin="0,0,0,8"/>
                                 </WrapPanel>
-                                <TextBlock Text="PNG, JPG, BMP or ICO · Up to 10 MB. Images keep their proportions. The SNU logo downloads from snu.ac.kr and uses a white background for visibility." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                <TextBlock Text="PNG, JPG, BMP or ICO · Up to 10 MB. Images keep their proportions. The bundled SNU logo works offline and uses a white background for visibility." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
                             </StackPanel>
                         </Border>
                         <Border Background="#EEEDE0" CornerRadius="12" Padding="22">

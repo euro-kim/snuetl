@@ -260,6 +260,23 @@ def _browser_operation(*, rotate: bool, disconnect: bool) -> dict[str, Any]:
                 _delete_token(old)
                 return {"connected": False, "revoked": True}
 
+            if PURPOSE == "snuetl-windows":
+                # Recover orphaned keys from older installations before creation.
+                page.goto(origin + "/profile/settings", wait_until="domcontentloaded")
+                if page.locator("#access_tokens_holder").count() == 0:
+                    raise DesktopError("REVOKE_FAILED", "Canvas token settings are unavailable")
+                ids = []
+                for row in page.locator("tr.access_token").all():
+                    purpose = row.locator("td.purpose")
+                    if purpose.count() and purpose.inner_text().strip() == PURPOSE:
+                        link = row.locator("a.delete_key_link").first.get_attribute("rel") or ""
+                        token_id = link.rsplit("/", 1)[-1]
+                        if not token_id.isdigit():
+                            raise DesktopError("REVOKE_FAILED", "Could not identify an older SNUETL key")
+                        ids.append(token_id)
+                for token_id in ids:
+                    _revoke_in_browser(page, CanvasToken("", origin, user_id, token_id, ""))
+
             expires = datetime.now(UTC) + timedelta(days=365)
             value, token_id, actual_expiry = _create_token_in_ui(
                 page, origin, expires.date(), purpose_name=PURPOSE
@@ -279,6 +296,8 @@ def _browser_operation(*, rotate: bool, disconnect: bool) -> dict[str, Any]:
                 _profile(new)
                 _save_token(new)
             except Exception as exc:
+                if getattr(exc, "code", None) == "CREDENTIAL_CLEANUP":
+                    raise  # The replacement is committed; keep it available for retry.
                 try:
                     _revoke_in_browser(page, new)
                 except Exception:
@@ -293,7 +312,7 @@ def _browser_operation(*, rotate: bool, disconnect: bool) -> dict[str, Any]:
                 "user_id": user_id,
                 "expires_at": new.expires_at,
             }
-            if old and old.token_id != new.token_id:
+            if old and old.token_id != new.token_id and PURPOSE != "snuetl-windows":
                 try:
                     _revoke_in_browser(page, old)
                     _credential_backend().delete_password(SERVICE, _account(old))
