@@ -313,6 +313,9 @@ internal static class Program
                 feedTabs.SelectedIndex = 2; Render(activity, Path.Combine(output, "mini-deadlines.png"));
                 Check(academicList.Items.Count == 1 && ((MiniPanelItem)academicList.Items[0]).Category == "deadlines", "Deadline tab contains unrelated activity");
                 activity.Hide();
+                var koreanTray = new MainWindow(controller); koreanTray.Render(status);
+                Render(koreanTray, Path.Combine(output, "mini-korean.png"));
+                koreanTray.CloseForLanguageChange();
                 var dashboard = new DashboardWindow(controller); Render(dashboard, Path.Combine(output, "dashboard.png")); dashboard.Close();
                 settingsDashboard.Close();
                 if (args.Contains("--benchmark"))

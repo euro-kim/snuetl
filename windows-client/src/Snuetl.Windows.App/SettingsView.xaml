@@ -9,11 +9,8 @@
         </Grid.RowDefinitions>
         <Border Background="{StaticResource BrandBrush}" Padding="28,24">
             <DockPanel>
-                <Button x:Name="OnboardingBack" DockPanel.Dock="Left" Visibility="Collapsed" Click="OnboardingBack_Click" VerticalAlignment="Center" Height="40" Margin="0,0,20,0" Padding="12,8" Foreground="White" Background="#292985" BorderBrush="#5959A5" BorderThickness="1" AutomationProperties.Name="{local:Translate '뒤로'}">
-                    <StackPanel Orientation="Horizontal">
-                        <Path Data="M 9,2 L 2,9 L 9,16 M 2,9 L 18,9" Stroke="White" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Width="18" Height="18" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <TextBlock Text="{local:Translate '뒤로'}" FontSize="14" VerticalAlignment="Center"/>
-                    </StackPanel>
+                <Button x:Name="OnboardingBack" DockPanel.Dock="Left" Visibility="Collapsed" Click="OnboardingBack_Click" VerticalAlignment="Center" Width="40" Height="40" Margin="0,0,20,0" Padding="10" Foreground="White" Background="#292985" BorderBrush="#5959A5" BorderThickness="1" AutomationProperties.Name="{local:Translate '뒤로'}">
+                    <Path Data="M 10,3 L 3,10 L 10,17 M 3,10 L 19,10" Stroke="White" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Width="20" Height="20"/>
                 </Button>
                 <Border DockPanel.Dock="Left" Background="White" CornerRadius="10" Padding="6" Margin="0,0,16,0">
                     <Image x:Name="Logo" Width="44" Height="44"/>
