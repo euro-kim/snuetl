@@ -18,12 +18,13 @@ public sealed class ClientController : IAsyncDisposable
     public LoginProgress? AutomaticLoginProgress { get; private set; }
     public event EventHandler? LoginProgressChanged;
     private readonly SemaphoreSlim updateLock = new(1,1);
-    public string UpdateStatus { get; private set; } = L.T("매주 새 버전 확인");
+    private Func<string> updateStatus = () => L.T("매주 새 버전 확인");
+    public string UpdateStatus => updateStatus();
     public bool IsRefreshing { get; private set; }
     private PeriodicTimer? refreshTimer;
     private int itemCount;
     private DateTimeOffset? nextRefresh;
-    private string? error;
+    private Exception? error;
     private string? lastLoggedError;
     private AccountStatus account = new();
 
@@ -31,6 +32,7 @@ public sealed class ClientController : IAsyncDisposable
     public AcademicSnapshot Academic { get; private set; } = new();
     public event EventHandler? AcademicChanged;
     public event EventHandler? AppearanceChanged;
+    public event EventHandler? LanguageChanged;
     public AppSettings Settings { get; private set; }
     public ClientStatus Status => BuildStatus();
     public string AccountExpiryDescription => account.ExpiryDescription;
@@ -43,8 +45,8 @@ public sealed class ClientController : IAsyncDisposable
         L.Language = Settings.Language;
         if (Settings.AvailableUpdate is { } cached && GitHubReleases.ParseVersion(cached.Version) <= GitHubReleases.ParseVersion(Branding.Version))
         { Settings = Settings with { AvailableUpdate = null }; store.Save(Settings); }
-        if (Settings.AvailableUpdate is { } update) UpdateStatus = L.Pair($"버전 {update.Version} 업데이트 가능 · {update.Size / 1048576.0:F1} MB", $"Version {update.Version} available · {update.Size / 1048576.0:F1} MB");
-        else if (Settings.LastUpdateCheck is { } checkedAt) UpdateStatus = L.Pair($"매주 새 버전 확인 · 최근 확인 {checkedAt.LocalDateTime:yyyy-MM-dd HH:mm}", $"Weekly updates · Last checked {checkedAt.LocalDateTime:g}");
+        if (Settings.AvailableUpdate is { } update) updateStatus = () => L.Pair($"버전 {update.Version} 업데이트 가능 · {update.Size / 1048576.0:F1} MB", $"Version {update.Version} available · {update.Size / 1048576.0:F1} MB");
+        else if (Settings.LastUpdateCheck is { } checkedAt) updateStatus = () => L.Pair($"매주 새 버전 확인 · 최근 확인 {checkedAt.LocalDateTime:yyyy-MM-dd HH:mm}", $"Weekly updates · Last checked {checkedAt.LocalDateTime:g}");
         Activity = new ActivityStore(store.DataDirectory);
         backend = new BackendClient(store.DataDirectory);
     }
@@ -130,8 +132,7 @@ public sealed class ClientController : IAsyncDisposable
                 var removed = await SignInAddon.RemoveAfterLoginAsync(store.DataDirectory);
                 SetLoginProgress(new("Connecting your course folder…"));
                 await EnsureProviderAsync();
-                var cleanup = removed ? "Sign-in browser removed; it will download again when needed." : "Sign-in browser could not be removed. You can remove it in Settings → Components.";
-                SetLoginProgress(new($"Connected. {account.ExpiryDescription} {cleanup} Your courses are syncing in the background.",1));
+                SetLoginProgress(new(removed ? "Connected." : "Sign-in browser could not be removed. You can remove it in Settings → Components.",1));
                 _ = RefreshAsync();
             }
             else SetLoginProgress(new("Automatic login installed. Choose Use automatic login to open the browser.",1));
@@ -143,8 +144,8 @@ public sealed class ClientController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            error = L.Error(exception);
-            SetLoginProgress(new(L.Error(exception)));
+            error = exception;
+            SetLoginProgress(new("", Failure: exception));
             throw;
         }
         finally { loginCancellation = null; LoginProgressChanged?.Invoke(this,EventArgs.Empty); Publish(); }
@@ -169,7 +170,7 @@ public sealed class ClientController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            error = L.Error(exception);
+            error = exception;
             Publish("Token needs attention");
             throw;
         }
@@ -183,8 +184,9 @@ public sealed class ClientController : IAsyncDisposable
     }
     public void SaveLanguage(string language)
     {
-        if (language is not ("system" or "ko" or "en")) return;
+        if (language is not ("system" or "ko" or "en") || Settings.Language == language) return;
         Settings = Settings with { Language = language }; store.Save(Settings);
+        L.Language = language; LanguageChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task DisconnectAsync()
@@ -198,7 +200,7 @@ public sealed class ClientController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            error = L.Error(exception);
+            error = exception;
         }
         Publish("Disconnected");
     }
@@ -246,17 +248,17 @@ public sealed class ClientController : IAsyncDisposable
             {
                 account = account with { Ready = false };
             }
-            error = L.Error(exception);
-            if (lastLoggedError != error) Activity.Add("Sync failed — open settings for details");
-            lastLoggedError = error;
+            error = exception;
+            if (lastLoggedError != error.Message) Activity.Add("Sync failed — open settings for details");
+            lastLoggedError = error.Message;
             nextRefresh = DateTimeOffset.Now.AddMinutes(Settings.RefreshMinutes);
             Publish("Refresh failed");
         }
         catch (Exception exception)
         {
-            error = L.Error(exception);
-            if (lastLoggedError != error) Activity.Add("Sync failed — open settings for details");
-            lastLoggedError = error;
+            error = exception;
+            if (lastLoggedError != error.Message) Activity.Add("Sync failed — open settings for details");
+            lastLoggedError = error.Message;
             nextRefresh = DateTimeOffset.Now.AddMinutes(Settings.RefreshMinutes);
             Publish("Refresh failed");
         }
@@ -328,15 +330,15 @@ public sealed class ClientController : IAsyncDisposable
             var now = DateTimeOffset.UtcNow;
             if (!force && !UpdateDue(Settings,now)) return;
             Settings = Settings with { LastUpdateAttempt = now }; store.Save(Settings);
-            UpdateStatus = L.T("새 버전 확인 중…"); Publish();
+            updateStatus = () => L.T("새 버전 확인 중…"); Publish();
             using var github = new GitHubReleases(Settings.ReleaseRepository, token: GitHubCredential.Read());
             var asset = await github.FindAsync(false,lifetime.Token);
             var newer = asset is not null && GitHubReleases.ParseVersion(asset.Version) > GitHubReleases.ParseVersion(Branding.Version);
             Settings = Settings with { LastUpdateCheck = now, AvailableUpdate = newer ? asset : null }; store.Save(Settings);
-            UpdateStatus = asset is null ? L.T("릴리스에서 Windows 설치 파일을 찾지 못했습니다.") : newer ? L.Pair($"버전 {asset!.Version} 업데이트 가능 · {asset.Size / 1048576.0:F1} MB", $"Version {asset!.Version} available · {asset.Size / 1048576.0:F1} MB") : L.Pair($"최신 버전입니다 · 확인 {now.LocalDateTime:yyyy-MM-dd HH:mm}", $"Up to date · Checked {now.LocalDateTime:g}");
+            updateStatus = () => asset is null ? L.T("릴리스에서 Windows 설치 파일을 찾지 못했습니다.") : newer ? L.Pair($"버전 {asset!.Version} 업데이트 가능 · {asset.Size / 1048576.0:F1} MB", $"Version {asset!.Version} available · {asset.Size / 1048576.0:F1} MB") : L.Pair($"최신 버전입니다 · 확인 {now.LocalDateTime:yyyy-MM-dd HH:mm}", $"Up to date · Checked {now.LocalDateTime:g}");
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (Exception e) { UpdateStatus = L.T("업데이트 확인 실패: ") + L.Error(e); }
+        catch (Exception e) { updateStatus = () => L.T("업데이트 확인 실패: ") + L.Error(e); }
         finally { updateLock.Release(); Publish(); }
     }
     internal static bool UpdateDue(AppSettings settings, DateTimeOffset now) =>
@@ -451,7 +453,7 @@ public sealed class ClientController : IAsyncDisposable
         Settings.LastRefresh,
         nextRefresh,
         itemCount,
-        error);
+        error is null ? null : L.Error(error));
 
     private void Publish(string? state = null) => StatusChanged?.Invoke(this, BuildStatus(state));
 

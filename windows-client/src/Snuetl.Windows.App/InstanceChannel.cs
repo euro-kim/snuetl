@@ -36,7 +36,7 @@ internal static class InstanceChannel
                 using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
                 var command = await reader.ReadLineAsync(timeout.Token);
                 await writer.WriteLineAsync("ok".AsMemory(), timeout.Token);
-                if (command is "show" or "shutdown" or "dashboard" or "notifications" or "files") receive(command);
+                if (command is "show" or "shutdown" or "dashboard" or "notifications" or "files" or "onboarding") receive(command);
             }
             catch (OperationCanceledException) { }
             catch (IOException) { }

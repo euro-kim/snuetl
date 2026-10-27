@@ -28,9 +28,15 @@ internal static class L
         "CREDENTIAL_STORE" => Pair("Windows 자격 증명 관리자에 키를 저장하지 못했습니다. 다시 시도하세요.", "Could not save the key in Windows Credential Manager. Please retry."),
         _ => Pair("eTL 요청을 완료하지 못했습니다. 잠시 후 다시 시도하세요. 오류 코드: ", "The eTL request failed. Please retry. Error code: ") + backend.Code
     } : error is OperationCanceledException ? Pair("요청 시간이 초과되었거나 취소되었습니다. 다시 시도하세요.", "The request timed out or was cancelled. Please retry.")
-      : Korean && Status(error.Message) == error.Message && !error.Message.Any(c => c >= '가' && c <= '힣')
-        ? "작업을 완료하지 못했습니다. 인터넷 연결과 Windows 권한을 확인한 뒤 다시 시도하세요."
-        : Status(error.Message);
+      : KnownError(error.Message);
+    private static string KnownError(string message)
+    {
+        if (English.ContainsKey(message)) return T(message);
+        foreach (var item in English)
+            if (item.Value == message) return T(item.Key);
+        return Pair("작업을 완료하지 못했습니다. 인터넷 연결과 Windows 권한을 확인한 뒤 다시 시도하세요.",
+            "Could not complete the operation. Check your internet connection and Windows permissions, then retry.");
+    }
     internal static string Status(string text)
     {
         if (!Korean) return T(text);

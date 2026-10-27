@@ -5,8 +5,8 @@ using Snuetl.Windows;
 // Runs from the new MSI before files are changed, including upgrades from 0.7.x.
 try
 {
-    var signaled = await InstanceChannel.SendAsync("shutdown");
-    if (!signaled && args.Length == 1)
+    await InstanceChannel.SendAsync("shutdown");
+    if (args.Length == 1)
     {
         var installed = Path.GetFullPath(args[0]);
         foreach (var process in Process.GetProcessesByName("SNUETL"))
@@ -16,10 +16,18 @@ try
                 try
                 {
                     if (process.SessionId != Process.GetCurrentProcess().SessionId) continue;
-                    if (string.Equals(process.MainModule?.FileName, installed, StringComparison.OrdinalIgnoreCase)
-                        && Version.TryParse(process.MainModule?.FileVersionInfo.FileVersion, out var version)
-                        && version < new Version(0, 8, 0))
-                    { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); }
+                    if (string.Equals(process.MainModule?.FileName, installed, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Give every version time to finish its normal shutdown before fallback.
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        try { await process.WaitForExitAsync(timeout.Token); }
+                        catch (OperationCanceledException)
+                        {
+                            process.Kill(entireProcessTree: true);
+                            using var killed = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                            await process.WaitForExitAsync(killed.Token);
+                        }
+                    }
                 }
                 catch (InvalidOperationException) { }
             }

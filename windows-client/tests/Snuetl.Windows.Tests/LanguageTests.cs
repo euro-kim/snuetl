@@ -28,4 +28,34 @@ public class LanguageTests
         }
         finally { CultureInfo.CurrentUICulture = original; L.Language = language; }
     }
+
+    [Theory]
+    [InlineData("en", "접근이 거부되었습니다.")]
+    [InlineData("ko", "Access is denied.")]
+    public void UnknownSystemErrorsUseSelectedLanguage(string language, string message)
+    {
+        var previous = L.Language;
+        try
+        {
+            L.Language = language;
+            var text = L.Error(new IOException(message));
+            Assert.NotEqual(message, text);
+            Assert.Equal(language == "ko", text.Any(c => c >= '가' && c <= '힣'));
+        }
+        finally { L.Language = previous; }
+    }
+    [Fact]
+    public void PendingFailureIsTranslatedWhenRendered()
+    {
+        var previous = L.Language;
+        try
+        {
+            L.Language = "ko";
+            var progress = new LoginProgress("", Failure: new BackendException("NETWORK", "private detail"));
+            Assert.Contains("인터넷", L.Error(progress.Failure!));
+            L.Language = "en";
+            Assert.Equal("Cannot reach eTL. Check your internet connection and try again.", L.Error(progress.Failure!));
+        }
+        finally { L.Language = previous; }
+    }
 }

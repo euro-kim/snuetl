@@ -3,7 +3,7 @@ using System.Diagnostics;
 
 namespace Snuetl.Windows;
 
-public sealed record LoginProgress(string Message, double? Fraction = null);
+public sealed record LoginProgress(string Message, double? Fraction = null, Exception? Failure = null);
 
 internal sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
 {

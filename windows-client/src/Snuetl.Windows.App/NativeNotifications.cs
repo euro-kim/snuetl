@@ -35,7 +35,7 @@ internal static class NativeNotifications
             if (notifier.Setting != NotificationSetting.Enabled) return;
             var files = events.All(e => e.Category == "files");
             var route = files ? "files" : "notifications";
-            var title = events.Count == 1 ? events[0].Title : $"{events.Count} updates from SNU eTL";
+            var title = events.Count == 1 ? events[0].Title : L.Pair($"eTL 새 소식 {events.Count}건", $"{events.Count} updates from SNU eTL");
             var body = events.Count == 1 ? $"{events[0].CourseLabel} · {events[0].Detail}" : string.Join(" · ", events.Take(3).Select(e => $"{e.CourseLabel}: {e.Title}"));
             var xml = new XmlDocument();
             xml.LoadXml($"<toast activationType='protocol' launch='snuetl://{route}'><visual><binding template='ToastGeneric'><text>{SecurityElement.Escape(title)}</text><text>{SecurityElement.Escape(body)}</text></binding></visual><audio silent='true'/></toast>");

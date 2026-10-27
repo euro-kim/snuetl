@@ -52,13 +52,18 @@ public sealed class SettingsStore
         }
     }
 
-    public static void ConfigureStartup(bool enabled)
+    public static void ConfigureStartup(bool enabled, bool repair = false)
     {
         using var key = Registry.CurrentUser.CreateSubKey(StartupKey, writable: true);
         if (enabled)
         {
             var executable = InstalledExecutable;
             if (executable is null) return; // Development runs must never become logon targets.
+            if (repair)
+            {
+                using var approved = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run", writable: true);
+                approved?.DeleteValue("SNUETL", false);
+            }
             key.SetValue("SNUETL", $"\"{executable}\" --background", RegistryValueKind.String);
         }
         else

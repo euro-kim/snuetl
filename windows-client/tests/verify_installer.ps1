@@ -36,6 +36,9 @@ try {
   $finalize = $actions | Where-Object Action -EQ 'InstallFinalize'
   if ([int]$launch.Sequence -le [int]$finalize.Sequence) { throw 'Connection chooser must launch after installation finishes' }
   if (($customActions | Where-Object Action -EQ 'LaunchSNUETL').Target -like '*install-signin*') { throw 'Installer must not download the browser automatically' }
+  $registry = @(Read-Table 'SELECT `Root`,`Key`,`Name`,`Value` FROM `Registry`' @('Root','Key','Name','Value'))
+  $startup = $registry | Where-Object { $_.Name -eq 'SNUETL' -and $_.Key -eq 'Software\Microsoft\Windows\CurrentVersion\Run' }
+  if ($startup.Root -ne '1' -or $startup.Value -notlike '*--background') { throw 'Per-user startup command is missing' }
   Write-Host 'Installer checks passed: version, upgrade isolation, shutdown sequence and runtime-folder cleanup.'
 } finally {
   [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)

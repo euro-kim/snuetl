@@ -9,18 +9,23 @@ namespace Snuetl.Windows;
 public partial class MainWindow : Window
 {
     private readonly ClientController controller;
+    private bool replacing;
     private readonly ObservableCollection<ActivityEntry> entries = [];
     public MainWindow(ClientController controller)
     {
         InitializeComponent(); this.controller = controller; ActivityList.ItemsSource = entries;
         Render(controller.Status); ReloadActivity(); UpdateIcon();
-        controller.Activity.Changed += (_, _) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible) ReloadActivity(); }));
-        controller.AcademicChanged += (_, _) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible) ReloadAcademic(); }));
+        controller.Activity.Changed += ActivityChanged;
+        controller.AcademicChanged += AcademicChanged;
         IsVisibleChanged += (_, _) => { if (IsVisible) ReloadActivity(); };
-        Closing += (_, args) => { args.Cancel = true; Hide(); };
+        Closing += (_, args) => { if (!replacing) { args.Cancel = true; Hide(); } };
+        Closed += (_, _) => { controller.Activity.Changed -= ActivityChanged; controller.AcademicChanged -= AcademicChanged; };
         Deactivated += (_, _) => Hide();
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Hide(); };
     }
+    private void ActivityChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible) ReloadActivity(); }));
+    private void AcademicChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(() => { if (IsVisible) ReloadAcademic(); }));
+    internal void CloseForLanguageChange() { replacing = true; Close(); }
     private void ReloadActivity()
     {
         var scroll = FindScrollViewer(ActivityList);

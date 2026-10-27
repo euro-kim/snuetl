@@ -5,7 +5,11 @@ internal static class InstalledProduct
 {
     internal static void Uninstall()
     {
-        using var root = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall");
+        foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
+        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+        using var registry = RegistryKey.OpenBaseKey(hive, view);
+        using var root = registry.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall");
         if (root is not null)
         {
             foreach (var name in root.GetSubKeyNames().OrderBy(n => n,StringComparer.Ordinal))
@@ -26,6 +30,7 @@ internal static class InstalledProduct
                 if (product?.GetValue("DisplayName") as string == "SNUETL" && Guid.TryParse(name,out var id))
                 { Process.Start(new ProcessStartInfo("msiexec.exe",$"/x {{{id}}}") { UseShellExecute = true }); return; }
             }
+        }
         }
         throw new IOException("This copy is not registered as an installed application. Install SNUETLSetup.exe first, or remove it from Windows Settings → Installed apps.");
     }

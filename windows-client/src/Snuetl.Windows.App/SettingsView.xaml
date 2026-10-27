@@ -14,7 +14,6 @@
                 </Border>
                 <StackPanel>
                     <TextBlock x:Name="WelcomeText" Text="{local:Translate 'SNUETL 설정'}" Foreground="White" FontSize="25" FontWeight="SemiBold"/>
-                    <TextBlock Text="{local:Translate '수업 자료를 파일 탐색기에서 바로 열 수 있습니다.'}" Foreground="#DCDAB2" Margin="0,6,0,0"/>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -118,7 +117,6 @@
                                     <ComboBoxItem Tag="ko" Content="한국어"/>
                                     <ComboBoxItem Tag="en" Content="English"/>
                                 </ComboBox>
-                                <TextBlock Text="{local:Translate '언어 변경은 다음 앱 실행 시 적용됩니다.'}" TextWrapping="Wrap" Margin="0,0,0,16"/>
 
                                 <CheckBox x:Name="StartupCheck" Content="{local:Translate 'Windows 로그인 시 자동 실행'}"/>
                                 <TextBlock x:Name="StartupStatusText" TextWrapping="Wrap" Foreground="#666666" Margin="0,10"/>
@@ -231,7 +229,7 @@
         <Border Grid.Row="3" Background="White" BorderBrush="#E1E1EC" BorderThickness="0,1,0,0" Padding="24,16">
             <DockPanel>
                 <Button x:Name="SaveSettingsButton" DockPanel.Dock="Right" Content="{local:Translate '설정 저장'}" Style="{StaticResource PrimaryButton}" Margin="16,0,0,0" Click="Done_Click"/>
-                <TextBlock x:Name="FeedbackText" Text="{local:Translate '변경한 설정은 저장 버튼을 눌러 적용하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="FeedbackText" Text="" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
     </Grid>

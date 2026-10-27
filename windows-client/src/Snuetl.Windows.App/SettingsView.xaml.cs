@@ -26,7 +26,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     private string notificationCourse = "*";
     private readonly Dictionary<string,string[]> selections = [];
-    private static readonly (string Key,string Label)[] Categories = [("announcements",L.T("공지사항")),("assignments",L.T("과제 및 마감 변경")),("reminders",L.T("마감 사전 알림")),("grades",L.T("성적 및 피드백")),("discussions",L.T("토론 활동")),("files",L.T("파일 업데이트"))];
+    private static readonly (string Key,string Label)[] Categories = [("announcements","공지사항"),("assignments","과제 및 마감 변경"),("reminders","마감 사전 알림"),("grades","성적 및 피드백"),("discussions","토론 활동"),("files","파일 업데이트")];
     public SettingsView(ClientController controller)
     {
         InitializeComponent(); this.controller = controller;
@@ -72,13 +72,14 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         LoginPanel.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
         if (progress is not null)
         {
-            LoginProgressText.Text = L.Status(progress.Message);
+            LoginProgressText.Text = progress.Failure is null ? L.Status(progress.Message) : L.Error(progress.Failure);
             LoginProgressBar.IsIndeterminate = controller.IsSigningIn && progress.Fraction is null;
             LoginProgressBar.Value = (progress.Fraction ?? 0) * 100;
             LoginProgressBar.Visibility = controller.IsSigningIn ? Visibility.Visible : Visibility.Collapsed;
             CancelLoginButton.Visibility = controller.IsSigningIn ? Visibility.Visible : Visibility.Collapsed;
             if (controller.IsSigningIn) ComponentStatus.Text = L.Status(progress.Message);
         }
+        LanguageChoice.IsEnabled = !busy && !controller.IsSigningIn;
         SetActionButtons(SettingsTabs,!busy && !controller.IsSigningIn);
         InstallUpdateButton.IsEnabled = !busy && !controller.IsSigningIn && controller.Settings.AvailableUpdate is not null;
     }
@@ -117,8 +118,13 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     private void Language_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (controller is not null && LanguageChoice.SelectedValue is string language)
+        if (controller is not null && IsLoaded && LanguageChoice.SelectedValue is string language
+            && controller.Settings.Language != language)
+        {
+            if (busy || controller.IsSigningIn || !SavePreferences())
+            { LanguageChoice.SelectedValue = controller.Settings.Language; return; }
             controller.SaveLanguage(language);
+        }
     }
     private void PasteToken_Click(object sender, RoutedEventArgs e)
     {
@@ -182,10 +188,10 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         CaptureCategories(); notificationCourse = course.Id;
         var selected = selections.GetValueOrDefault(course.Id, selections.GetValueOrDefault("*", []));
         NotificationChoices.Children.Clear();
-        foreach (var (key,label) in Categories) NotificationChoices.Children.Add(new System.Windows.Controls.CheckBox { Content = label, Tag = key, IsChecked = selected.Contains(key), Margin = new Thickness(0,6,0,6) });
+        foreach (var (key,label) in Categories) NotificationChoices.Children.Add(new System.Windows.Controls.CheckBox { Content = L.T(label), Tag = key, IsChecked = selected.Contains(key), Margin = new Thickness(0,6,0,6) });
     }
     private void RepairStartup_Click(object sender, RoutedEventArgs e)
-    { SettingsStore.ConfigureStartup(StartupCheck.IsChecked == true); StartupStatusText.Text = KoreanText.Status(SettingsStore.StartupStatus); }
+    { if (!SavePreferences()) return; SettingsStore.ConfigureStartup(StartupCheck.IsChecked == true, repair: true); StartupStatusText.Text = KoreanText.Status(SettingsStore.StartupStatus); }
     private async void InstallAddon_Click(object sender, RoutedEventArgs e)
     {
         if (DownloadConsent.IsChecked != true) { FeedbackText.Text = L.T("구성 요소 다운로드 항목을 선택하세요."); return; }

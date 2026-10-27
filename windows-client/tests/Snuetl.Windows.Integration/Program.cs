@@ -193,9 +193,20 @@ internal static class Program
                 Check(fileButton is not null && fileButton.Focusable, "File actions must be keyboard focusable");
                 activity.Hide();
                 controller.SaveLanguage("ko"); Check(store.Load().Language == "ko", "Language preference must persist");
+                var languageChanges = 0;
+                controller.LanguageChanged += (_, _) => languageChanges++;
+                controller.SaveLanguage("en");
+                Check(L.Language == "en" && languageChanges == 1, "Language change must apply immediately and notify windows");
+                controller.SaveLanguage("en");
+                Check(languageChanges == 1, "Selecting the active language must not recreate windows");
+                controller.SaveLanguage("ko");
+
                 foreach (var language in new[] { "ko", "en" })
                 {
                     L.Language = language;
+                    if (controller.Status.Error is { } pendingError)
+                        Check(pendingError.Any(c => c >= '가' && c <= '힣') == (language == "ko"), "Cached warnings must use the current display language");
+
                     var completed = false;
                     var chooser = new OnboardingWindow(controller, () => completed = true);
                     Check(!((System.Windows.Controls.Button)chooser.FindName("AutomaticChoice")).IsEnabled, "Choice must wait for initialization");

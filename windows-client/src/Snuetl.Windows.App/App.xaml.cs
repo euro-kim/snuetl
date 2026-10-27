@@ -46,6 +46,7 @@ public partial class App : System.Windows.Application
             })), lifetime.Token);
             controller.StatusChanged += OnStatusChanged;
             controller.AppearanceChanged += (_, _) => UpdateIcon();
+            controller.LanguageChanged += (_, _) => Dispatcher.BeginInvoke(new Action(RefreshLanguage));
             if (e.Args.Contains("--onboarding") && !controller.Settings.SetupCompleted) ShowOnboarding();
             await controller.StartAsync();
             startupReady = true; onboarding?.SetReady(true);
@@ -99,6 +100,20 @@ public partial class App : System.Windows.Application
         throw new IOException("SNUETL is still finishing a file operation. Quit it from the tray and retry setup.");
     }
 
+    private void RefreshLanguage()
+    {
+        // Recreate translated controls while keeping the backend and sync session alive.
+        dashboard?.Close();
+        window?.CloseForLanguageChange(); window = null;
+        onboarding?.Close();
+        if (tray is not null)
+        {
+            tray.Visible = false; tray.Icon?.Dispose();
+            tray.ContextMenuStrip?.Dispose(); tray.Dispose(); tray = null;
+        }
+        ConfigureTray();
+        ShowSettings();
+    }
     private void ConfigureTray()
     {
         tray = new Forms.NotifyIcon { Text = "SNUETL", Icon = Branding.LoadIcon(), Visible = true, ContextMenuStrip = new Forms.ContextMenuStrip() };
