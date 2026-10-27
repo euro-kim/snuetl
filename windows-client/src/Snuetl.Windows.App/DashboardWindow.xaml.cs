@@ -12,7 +12,7 @@ public partial class DashboardWindow : Window
     private int previousPage;
     private sealed record Row(string Title, string Label, string Detail, string Action, string? Url = null, ActivityEntry? File = null)
     {
-        public string Badge => File?.Badge ?? (Label.Contains("ANNOUNCEMENT",StringComparison.OrdinalIgnoreCase) ? "📣" : Label.Contains("COURSE") ? "▣" : "◷");
+        public string Badge => File?.Badge ?? (Label.Contains("공지사항") ? "📣" : Label.Contains("강좌") ? "▣" : "◷");
         public string BadgeColor => File?.BadgeColor ?? "#4262B8";
         public string BadgeBackground => File?.BadgeBackground ?? "#EAF0FF";
     }
@@ -46,14 +46,14 @@ public partial class DashboardWindow : Window
     {
         var value = Value(row,key);
         if (value.Length == 0 || value == "False") return "";
-        if (key.EndsWith("_at",StringComparison.Ordinal) && DateTimeOffset.TryParse(value,out var time)) value = time.LocalDateTime.ToString("MMM d, HH:mm");
+        if (key.EndsWith("_at",StringComparison.Ordinal) && DateTimeOffset.TryParse(value,out var time)) value = time.LocalDateTime.ToString("MM-dd HH:mm");
         if (key == "comments" && row.GetProperty(key).ValueKind == JsonValueKind.Array)
             return string.Join(" · ", row.GetProperty(key).EnumerateArray().Select(c => Value(c,"author") + ": " + Value(c,"text")));
-        return key is "course_name" or "summary" ? value : key.Replace('_',' ') + ": " + value;
+        return key is "course_name" or "summary" ? value : KoreanText.Field(key) + ": " + KoreanText.AcademicValue(value);
     }
     internal void Render()
     {
-        SyncButton.IsEnabled = !controller.IsRefreshing; SyncLabel.Text = controller.IsRefreshing ? "Syncing…" : "Sync now";
+        SyncButton.IsEnabled = !controller.IsRefreshing; SyncLabel.Text = controller.IsRefreshing ? "동기화 중…" : "지금 동기화";
         var page = Navigation.SelectedIndex;
         if (page == 5)
         {
@@ -63,15 +63,15 @@ public partial class DashboardWindow : Window
             settings.Render(controller.Status); return;
         }
         DashboardContent.Visibility = Visibility.Visible; SettingsHost.Visibility = Visibility.Collapsed;
-        Heading.Text = (Navigation.SelectedItem as ListBoxItem)?.Content?.ToString() ?? "Overview";
+        Heading.Text = (Navigation.SelectedItem as ListBoxItem)?.Content?.ToString() ?? "학습 현황";
         var snapshot = controller.Academic;
-        StatusText.Text = snapshot.GeneratedAt is null ? controller.Status.State : $"{controller.Status.State} · Updated {snapshot.GeneratedAt.Value.LocalDateTime:g} · Every {controller.Settings.RefreshMinutes} minutes";
+        StatusText.Text = snapshot.GeneratedAt is null ? KoreanText.Status(controller.Status.State) : $"{KoreanText.Status(controller.Status.State)} · 최근 확인 {snapshot.GeneratedAt.Value.LocalDateTime:yyyy-MM-dd HH:mm} · {controller.Settings.RefreshMinutes}분마다 동기화";
         ErrorText.Text = string.Join("\n", new[] { controller.Status.Error }.Where(s => !string.IsNullOrEmpty(s)).Concat(snapshot.Errors));
         var rows = new List<Row>();
         if (page == 1)
-            rows.AddRange(snapshot.Courses.Select(c => new Row(c.Name, "COURSE", $"Course {c.Id}", "Open on eTL ↗", c.Url)));
+            rows.AddRange(snapshot.Courses.Select(c => new Row(c.Name, "강좌", $"강좌 번호 {c.Id}", "eTL에서 열기 ↗", c.Url)));
         else if (page == 3)
-            rows.AddRange(snapshot.Events.Select(e => new Row(e.Title, $"{e.Category.ToUpperInvariant()} · {e.Time.LocalDateTime:g}", e.Detail, "Open on eTL ↗", e.Url)));
+            rows.AddRange(snapshot.Events.Select(e => new Row(e.Title, $"{KoreanText.Category(e.Category)} · {e.Time.LocalDateTime:MM-dd HH:mm}", e.Detail, "eTL에서 열기 ↗", e.Url)));
         else if (page == 4)
             rows.AddRange(controller.ActivitySnapshot().Select(e => new Row(e.Name, e.TimeLabel, e.StatusLabel, string.IsNullOrEmpty(e.DirectoryLabel) ? "" : e.DirectoryLabel + "  ↗", File:e)));
         else
@@ -85,14 +85,14 @@ public partial class DashboardWindow : Window
                     var title = Value(item, "title");
                     if (title.Length == 0) title = Value(item, "course_name");
                     var detail = string.Join(" · ", new[] { "course_name", "summary", "due_at", "start_at", "workflow_state", "grade", "current_grade", "current_score", "submitted_at", "graded_at", "last_reply_at", "missing", "late", "comments", "unread_count" }.Select(k => Detail(item,k)).Where(v => v.Length > 0));
-                    rows.Add(new Row(title, kind.ToUpperInvariant(), detail, "Open on eTL ↗", Value(item,"url")));
+                    rows.Add(new Row(title, KoreanText.Category(kind), detail, "eTL에서 열기 ↗", Value(item,"url")));
                 }
             }
         }
         Rows.ItemsSource = rows;
         Empty.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (page == 3) Empty.Text = "No notifications yet. Choose categories in Settings. Existing announcements are silently baselined.";
-        else Empty.Text = "No items to show. Connect your account in Settings, then refresh.";
+        if (page == 3) Empty.Text = "새 알림이 없습니다. 설정에서 받을 알림을 선택하세요.";
+        else Empty.Text = "표시할 항목이 없습니다. 설정에서 계정을 연결한 뒤 동기화하세요.";
     }
     private void OpenRow(object sender, RoutedEventArgs e) => Open((Row)((Button)sender).Tag, false);
     private void OpenDirectory(object sender, RoutedEventArgs e) => Open((Row)((Button)sender).Tag, true);

@@ -18,7 +18,7 @@ public sealed class ClientController : IAsyncDisposable
     public LoginProgress? AutomaticLoginProgress { get; private set; }
     public event EventHandler? LoginProgressChanged;
     private readonly SemaphoreSlim updateLock = new(1,1);
-    public string UpdateStatus { get; private set; } = "Checks GitHub weekly";
+    public string UpdateStatus { get; private set; } = "매주 새 버전 확인";
     public bool IsRefreshing { get; private set; }
     private PeriodicTimer? refreshTimer;
     private int itemCount;
@@ -42,8 +42,8 @@ public sealed class ClientController : IAsyncDisposable
         Settings = store.Load();
         if (Settings.AvailableUpdate is { } cached && GitHubReleases.ParseVersion(cached.Version) <= GitHubReleases.ParseVersion(Branding.Version))
         { Settings = Settings with { AvailableUpdate = null }; store.Save(Settings); }
-        if (Settings.AvailableUpdate is { } update) UpdateStatus = $"Version {update.Version} is available · {update.Size / 1048576.0:F1} MB";
-        else if (Settings.LastUpdateCheck is { } checkedAt) UpdateStatus = $"Checks GitHub weekly · Last checked {checkedAt.LocalDateTime:g}";
+        if (Settings.AvailableUpdate is { } update) UpdateStatus = $"버전 {update.Version} 업데이트 가능 · {update.Size / 1048576.0:F1} MB";
+        else if (Settings.LastUpdateCheck is { } checkedAt) UpdateStatus = $"매주 새 버전 확인 · 최근 확인 {checkedAt.LocalDateTime:yyyy-MM-dd HH:mm}";
         Activity = new ActivityStore(store.DataDirectory);
         backend = new BackendClient(store.DataDirectory);
     }
@@ -51,9 +51,9 @@ public sealed class ClientController : IAsyncDisposable
     public async Task StartAsync()
     {
         // Configure per-user startup even when first-run authentication is postponed.
-        if (Settings.IconChoice == "SNU" && (Settings.IconStyleVersion < 2 || !File.Exists(Branding.IconPath)))
+        if (Settings.IconChoice == "SNU" && (Settings.IconStyleVersion < 3 || !File.Exists(Branding.IconPath)))
         {
-            try { await Branding.ApplyAsync("SNU"); Settings = Settings with { IconStyleVersion = 2 }; }
+            try { await Branding.ApplyAsync("SNU"); Settings = Settings with { IconStyleVersion = 3 }; }
             catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException) { Activity.Add("SNU icon update postponed until online"); }
         }
         else if (!File.Exists(Branding.IconPath)) await Branding.ApplyAsync(Settings.IconChoice == "Custom" ? "Default" : Settings.IconChoice);
@@ -281,7 +281,7 @@ public sealed class ClientController : IAsyncDisposable
     public async Task SetAppearanceAsync(string choice, string? source = null)
     {
         await Branding.ApplyAsync(choice, source);
-        Settings = Settings with { IconChoice = choice, IconStyleVersion = 2 };
+        Settings = Settings with { IconChoice = choice, IconStyleVersion = 3 };
         store.Save(Settings);
         AppearanceChanged?.Invoke(this, EventArgs.Empty);
         if (provider is not null) await ExplorerSyncRoot.RegisterAsync(Settings.SyncRoot);
@@ -309,15 +309,15 @@ public sealed class ClientController : IAsyncDisposable
             var now = DateTimeOffset.UtcNow;
             if (!force && !UpdateDue(Settings,now)) return;
             Settings = Settings with { LastUpdateAttempt = now }; store.Save(Settings);
-            UpdateStatus = "Checking GitHub releases…"; Publish();
+            UpdateStatus = "새 버전 확인 중…"; Publish();
             using var github = new GitHubReleases(Settings.ReleaseRepository, token: GitHubCredential.Read());
             var asset = await github.FindAsync(false,lifetime.Token);
             var newer = asset is not null && GitHubReleases.ParseVersion(asset.Version) > GitHubReleases.ParseVersion(Branding.Version);
             Settings = Settings with { LastUpdateCheck = now, AvailableUpdate = newer ? asset : null }; store.Save(Settings);
-            UpdateStatus = asset is null ? "No Windows installer was found in the published releases." : newer ? $"Version {asset!.Version} is available · {asset.Size / 1048576.0:F1} MB" : $"You're up to date · Checked {now.LocalDateTime:g}";
+            UpdateStatus = asset is null ? "릴리스에서 Windows 설치 파일을 찾지 못했습니다." : newer ? $"버전 {asset!.Version} 업데이트 가능 · {asset.Size / 1048576.0:F1} MB" : $"최신 버전입니다 · 확인 {now.LocalDateTime:yyyy-MM-dd HH:mm}";
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (Exception e) { UpdateStatus = "Update check unavailable: " + e.Message; }
+        catch (Exception e) { UpdateStatus = "업데이트 확인 실패: " + e.Message; }
         finally { updateLock.Release(); Publish(); }
     }
     internal static bool UpdateDue(AppSettings settings, DateTimeOffset now) =>

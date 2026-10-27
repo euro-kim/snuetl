@@ -13,8 +13,8 @@
                     <Image x:Name="Logo" Width="44" Height="44"/>
                 </Border>
                 <StackPanel>
-                    <TextBlock x:Name="WelcomeText" Text="Make SNUETL yours" Foreground="White" FontSize="25" FontWeight="SemiBold"/>
-                    <TextBlock Text="Course files in Explorer. Ready when you need them." Foreground="#DCDAB2" Margin="0,6,0,0"/>
+                    <TextBlock x:Name="WelcomeText" Text="SNUETL 설정" Foreground="White" FontSize="25" FontWeight="SemiBold"/>
+                    <TextBlock Text="수업 자료를 파일 탐색기에서 바로 열 수 있습니다." Foreground="#DCDAB2" Margin="0,6,0,0"/>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -46,92 +46,92 @@
                     </Setter>
                 </Style>
             </TabControl.Resources>
-            <TabItem Header="General">
+            <TabItem Header="일반">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="0,18,0,0">
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="Your account" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="eTL 계정" Style="{StaticResource SectionTitle}"/>
                                 <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <TextBlock x:Name="AccountExpiryText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <StackPanel x:Name="SignInPanel">
-                                    <TextBlock Text="Automatic login downloads a temporary browser and requests an API key valid for about 365 days, or reuses your existing valid key. After your key is verified, the browser package is removed to free space. It downloads again when you need to sign in. Your saved key keeps course sync working." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
-                                    <Button Content="Use automatic login (downloads component if needed)" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
-                                    <Expander IsExpanded="True" Header="Use a Canvas API token" Margin="0,16,0,0">
+                                    <TextBlock Text="자동 로그인용 브라우저는 필요할 때 설치되며, 연결 후 자동으로 정리됩니다." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
+                                    <Button Content="자동 로그인" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
+                                    <Expander IsExpanded="True" Header="API 키로 연결" Margin="0,16,0,0">
                                         <StackPanel Margin="0,12,0,0">
-                                            <TextBlock Text="Create an access token in SNU eTL Account Settings, copy the complete key, and paste it below. SNUETL handles the authorization header automatically and securely replaces previously saved keys." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,10"/>
-                                            <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="Canvas API token"/>
+                                            <TextBlock Text="eTL 계정 설정에서 발급한 API 키 전체를 붙여 넣으세요." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,10"/>
+                                            <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="eTL API 키"/>
                                             <WrapPanel Margin="0,12,0,0">
-                                                <Button Content="Connect account" Click="ManualConnect_Click"/>
-                                                <Button Content="Open token settings" Click="TokenSettings_Click"/>
+                                                <Button Content="계정 연결" Click="ManualConnect_Click"/>
+                                                <Button Content="API 키 발급 페이지" Click="TokenSettings_Click"/>
                                             </WrapPanel>
                                         </StackPanel>
                                     </Expander>
                                 </StackPanel>
-                                <Button x:Name="SignOutButton" Content="Sign out" HorizontalAlignment="Left" Click="SignOut_Click"/>
+                                <Button x:Name="SignOutButton" Content="로그아웃" HorizontalAlignment="Left" Click="SignOut_Click"/>
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="Sync folder" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="동기화 폴더" Style="{StaticResource SectionTitle}"/>
                                 <TextBlock x:Name="RootText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,14"/>
                                 <WrapPanel>
-                                    <Button Content="Open folder" Click="Open_Click"/>
-                                    <Button Content="Choose folder…" Click="Browse_Click"/>
+                                    <Button Content="폴더 열기" Click="Open_Click"/>
+                                    <Button Content="폴더 선택…" Click="Browse_Click"/>
                                 </WrapPanel>
-                                <TextBlock Text="Files download when opened. Your local edits stay on this device and are never uploaded." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>
+                                <TextBlock Text="파일을 열면 내려받습니다. 로컬 수정 내용은 eTL에 업로드되지 않습니다." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="Sync preferences" Style="{StaticResource SectionTitle}"/>
-                                <CheckBox x:Name="StartupCheck" Content="Start SNUETL when I sign in to Windows"/>
+                                <TextBlock Text="동기화 설정" Style="{StaticResource SectionTitle}"/>
+                                <CheckBox x:Name="StartupCheck" Content="Windows 로그인 시 자동 실행"/>
                                 <TextBlock x:Name="StartupStatusText" TextWrapping="Wrap" Foreground="#666666" Margin="0,10"/>
-                                <Button Content="Repair startup" HorizontalAlignment="Left" Click="RepairStartup_Click"/>
+                                <Button Content="자동 실행 복구" HorizontalAlignment="Left" Click="RepairStartup_Click"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
-                                    <TextBlock Text="Check for updates every" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                    <TextBox x:Name="IntervalBox" Width="76" MaxLength="4" AutomationProperties.Name="Sync interval in minutes" Text="15"/>
-                                    <TextBlock Text="minutes" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                    <TextBlock Text="자동 동기화 간격" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <TextBox x:Name="IntervalBox" Width="76" MaxLength="4" AutomationProperties.Name="동기화 간격 분" Text="15"/>
+                                    <TextBlock Text="분" VerticalAlignment="Center" Margin="10,0,0,0"/>
                                 </StackPanel>
-                                <TextBlock Text="1–1,440 minutes. Your new interval takes effect when you choose Done." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                <TextBlock Text="1~1,440분. 설정 저장 시 적용됩니다." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-            <TabItem Header="Notifications">
+            <TabItem Header="알림 설정">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,18,0,0">
                     <Border Style="{StaticResource Card}"><StackPanel>
-                        <TextBlock Text="Choose what reaches you" Style="{StaticResource SectionTitle}"/>
-                        <TextBlock Text="All categories are off until you select them. Existing academic items are silently baselined. Windows notification settings and Do Not Disturb still apply." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,16"/>
-                        <TextBlock Text="Apply to"/>
+                        <TextBlock Text="받을 알림 선택" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="선택한 항목의 새 소식만 알립니다. Windows 알림 및 방해 금지 설정이 적용됩니다." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,16"/>
+                        <TextBlock Text="적용 강좌"/>
                         <ComboBox x:Name="NotificationCourse" SelectionChanged="NotificationCourse_Changed" Margin="0,8,0,16" DisplayMemberPath="Name"/>
                         <StackPanel x:Name="NotificationChoices"/>
-                        <TextBlock Text="Reminder offsets in hours (comma separated)" Margin="0,16,0,8"/>
+                        <TextBlock Text="마감 몇 시간 전에 알릴까요? 쉼표로 구분" Margin="0,16,0,8"/>
                         <TextBox x:Name="ReminderHours" Text="24, 1" AutomationProperties.Name="Reminder offsets in hours"/>
                         <TextBlock x:Name="NotificationStatus" TextWrapping="Wrap" Foreground="#666666" Margin="0,16,0,0"/>
                     </StackPanel></Border>
                 </StackPanel></ScrollViewer>
             </TabItem>
-            <TabItem Header="Components">
+            <TabItem Header="로그인 구성 요소">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,18,0,0">
                     <Border Style="{StaticResource Card}"><StackPanel>
-                        <TextBlock Text="Automatic sign-in" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="자동 로그인" Style="{StaticResource SectionTitle}"/>
                         <TextBlock x:Name="ComponentDescription" TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,16"/>
-                        <CheckBox x:Name="DownloadConsent" IsChecked="True" Content="Download the optional automatic sign-in component" Margin="0,0,0,16"/>
-                        <WrapPanel><Button Content="Download and install" Click="InstallAddon_Click"/><Button Content="Install from ZIP…" Click="LocalAddon_Click"/><Button Content="Remove add-on" Click="RemoveAddon_Click"/></WrapPanel>
+                        <CheckBox x:Name="DownloadConsent" IsChecked="True" Content="자동 로그인 구성 요소 다운로드" Margin="0,0,0,16"/>
+                        <WrapPanel><Button Content="다운로드 및 설치" Click="InstallAddon_Click"/><Button Content="ZIP 파일로 설치…" Click="LocalAddon_Click"/><Button Content="구성 요소 제거" Click="RemoveAddon_Click"/></WrapPanel>
                         <TextBlock x:Name="ComponentStatus" TextWrapping="Wrap" Margin="0,16,0,0"/>
-                        <TextBlock Text="A failed download leaves file sync and manual-token setup fully usable. Removing this component keeps your connected account." Foreground="#666666" TextWrapping="Wrap" Margin="0,16,0,0"/>
+                        <TextBlock Text="구성 요소를 제거해도 연결된 계정과 파일 동기화는 유지됩니다." Foreground="#666666" TextWrapping="Wrap" Margin="0,16,0,0"/>
                     </StackPanel></Border>
                 </StackPanel></ScrollViewer>
             </TabItem>
-            <TabItem Header="Appearance">
+            <TabItem Header="모양">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="0,18,0,0">
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="One icon, everywhere" Style="{StaticResource SectionTitle}"/>
-                                <TextBlock Text="Choose the icon shown in the Windows tray and beside SNUETL above This PC in File Explorer." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,22"/>
+                                <TextBlock Text="아이콘" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="트레이와 파일 탐색기에 표시할 아이콘을 선택하세요." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,22"/>
                                 <Border Background="#F5F5F8" CornerRadius="12" Padding="22" Margin="0,0,0,22">
                                     <StackPanel Orientation="Horizontal">
                                         <Border Background="White" CornerRadius="12" Padding="10">
@@ -139,51 +139,45 @@
                                         </Border>
                                         <StackPanel VerticalAlignment="Center" Margin="18,0,0,0">
                                             <TextBlock x:Name="IconChoiceText" FontWeight="SemiBold" FontSize="17"/>
-                                            <TextBlock Text="Explorer + notification area" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
+                                            <TextBlock Text="파일 탐색기 및 트레이" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>
                                 <WrapPanel>
-                                    <Button Content="Default icon" Click="DefaultIcon_Click" Margin="0,0,8,8"/>
-                                    <Button Content="Use SNU logo" Click="SnuIcon_Click" Margin="0,0,8,8"/>
-                                    <Button Content="Choose image…" Style="{StaticResource PrimaryButton}" Click="CustomIcon_Click" Margin="0,0,0,8"/>
+                                    <Button Content="S 문자 아이콘" Click="DefaultIcon_Click" Margin="0,0,8,8"/>
+                                    <Button Content="SNU 로고 기본값" Click="SnuIcon_Click" Margin="0,0,8,8"/>
+                                    <Button Content="이미지 선택…" Style="{StaticResource PrimaryButton}" Click="CustomIcon_Click" Margin="0,0,0,8"/>
                                 </WrapPanel>
-                                <TextBlock Text="PNG, JPG, BMP or ICO · Up to 10 MB. Images keep their proportions. The bundled SNU logo works offline and uses a white background for visibility." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
-                            </StackPanel>
-                        </Border>
-                        <Border Background="#EEEDE0" CornerRadius="12" Padding="22">
-                            <StackPanel>
-                                <TextBlock Text="A familiar place for your course files" FontWeight="SemiBold"/>
-                                <TextBlock Text="SNU blue, beige and gray bring a quiet, consistent appearance to your desktop." TextWrapping="Wrap" Foreground="#56564D" Margin="0,8,0,0"/>
+                                <TextBlock Text="PNG·JPG·BMP·ICO, 최대 10 MB. 기본 SNU 로고는 둥근 바탕으로 표시됩니다." FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-            <TabItem Header="About &amp; updates">
+            <TabItem Header="정보 및 업데이트">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,18,0,0">
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="SNUETL for Windows" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="SNUETL Windows" Style="{StaticResource SectionTitle}"/>
                             <TextBlock x:Name="VersionText" Foreground="{StaticResource BrandBrush}" FontSize="20" Margin="0,0,0,12"/>
-                            <TextBlock Text="SNUETL checks your GitHub releases every week. Download the latest Windows installer here; your account, icon, activity and synced folder are kept." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,18"/>
-                            <Expander Header="Private GitHub release access" Margin="0,0,0,16"><StackPanel Margin="0,12,0,0">
-                                <TextBlock Text="Public releases need no GitHub token. For private releases, use a fine-grained GitHub token with Contents: read permission for euro-kim/snuetl. This is separate from your Canvas token and is stored in Windows Credential Manager." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,10"/>
-                                <PasswordBox x:Name="GitHubTokenBox" Padding="10" AutomationProperties.Name="GitHub release access token"/>
-                                <WrapPanel Margin="0,10,0,0"><Button Content="Save release access" Click="SaveGitHub_Click"/><Button Content="Remove release access" Click="RemoveGitHub_Click"/></WrapPanel>
+                            <TextBlock Text="새 버전을 매주 확인합니다. 설치 시 계정과 동기화 폴더는 유지됩니다." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,18"/>
+                            <Expander Header="비공개 릴리스 접근 설정" Margin="0,0,0,16"><StackPanel Margin="0,12,0,0">
+                                <TextBlock Text="비공개 릴리스에는 euro-kim/snuetl 저장소의 Contents 읽기 권한이 있는 GitHub 토큰이 필요합니다. Windows 자격 증명 관리자에 저장됩니다." TextWrapping="Wrap" Foreground="#666666" Margin="0,0,0,10"/>
+                                <PasswordBox x:Name="GitHubTokenBox" Padding="10" AutomationProperties.Name="GitHub 릴리스 토큰"/>
+                                <WrapPanel Margin="0,10,0,0"><Button Content="토큰 저장" Click="SaveGitHub_Click"/><Button Content="토큰 제거" Click="RemoveGitHub_Click"/></WrapPanel>
                                 <TextBlock x:Name="GitHubAccessStatus" Margin="0,10,0,0" TextWrapping="Wrap"/>
                             </StackPanel></Expander>
                             <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" Margin="0,0,0,12"/>
                             <ProgressBar x:Name="UpdateProgress" Minimum="0" Maximum="100" Height="5" Visibility="Collapsed" Margin="0,0,0,12"/>
-                            <WrapPanel><Button Content="Check GitHub now" Click="CheckUpdates_Click"/><Button x:Name="InstallUpdateButton" Content="Download &amp; install update" Style="{StaticResource PrimaryButton}" Click="InstallUpdate_Click"/><Button Content="Choose setup file…" Click="Update_Click"/></WrapPanel>
-                            <TextBlock Text="Checks GitHub weekly. Updates download and install only when you choose. The sign-in ZIP is reused independently of the client version." FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,16,0,0"/>
+                            <WrapPanel><Button Content="새 버전 확인" Click="CheckUpdates_Click"/><Button x:Name="InstallUpdateButton" Content="업데이트 설치" Style="{StaticResource PrimaryButton}" Click="InstallUpdate_Click"/><Button Content="설치 파일 선택…" Click="Update_Click"/></WrapPanel>
+                            <TextBlock Text="설치를 선택해야 업데이트를 내려받습니다." FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,16,0,0"/>
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="Uninstall SNUETL" Style="{StaticResource SectionTitle}"/>
-                            <TextBlock Text="SNUETL removes its Explorer entry, startup entry, saved credentials, settings, cache and activity. Downloaded files and your local folders stay on this computer. Online-only placeholders are removed; the originals remain on SNU eTL." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
-                            <Button Content="Uninstall SNUETL…" Foreground="#B42335" BorderBrush="#F1BBC1" HorizontalAlignment="Left" Margin="0,18,0,0" Click="Uninstall_Click"/>
+                            <TextBlock Text="SNUETL 제거" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="앱 설정과 저장된 인증 정보를 제거합니다. 내려받은 파일과 로컬 폴더는 보존되며, 온라인 전용 항목의 원본은 eTL에 남습니다." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+                            <Button Content="SNUETL 제거…" Foreground="#B42335" BorderBrush="#F1BBC1" HorizontalAlignment="Left" Margin="0,18,0,0" Click="Uninstall_Click"/>
                         </StackPanel>
                     </Border>
                 </StackPanel></ScrollViewer>
@@ -194,15 +188,15 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock x:Name="LoginProgressText" TextWrapping="Wrap" Foreground="#0F0F70" AutomationProperties.LiveSetting="Polite"/>
-                    <ProgressBar x:Name="LoginProgressBar" Minimum="0" Maximum="100" Height="6" Margin="0,10,0,0" AutomationProperties.Name="Automatic login progress"/>
+                    <ProgressBar x:Name="LoginProgressBar" Minimum="0" Maximum="100" Height="6" Margin="0,10,0,0" AutomationProperties.Name="자동 로그인 진행 상태"/>
                 </StackPanel>
-                <Button x:Name="CancelLoginButton" Grid.Column="1" Content="Cancel" Margin="16,0,0,0" VerticalAlignment="Center" Click="CancelLogin_Click"/>
+                <Button x:Name="CancelLoginButton" Grid.Column="1" Content="취소" Margin="16,0,0,0" VerticalAlignment="Center" Click="CancelLogin_Click"/>
             </Grid>
         </Border>
         <Border Grid.Row="3" Background="White" BorderBrush="#E1E1EC" BorderThickness="0,1,0,0" Padding="24,16">
             <DockPanel>
-                <Button DockPanel.Dock="Right" Content="Save settings" Style="{StaticResource PrimaryButton}" Margin="16,0,0,0" Click="Done_Click"/>
-                <TextBlock x:Name="FeedbackText" Text="Choose your icon in Appearance, then you’re ready to go." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+                <Button DockPanel.Dock="Right" Content="설정 저장" Style="{StaticResource PrimaryButton}" Margin="16,0,0,0" Click="Done_Click"/>
+                <TextBlock x:Name="FeedbackText" Text="변경한 설정은 저장 버튼을 눌러 적용하세요." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
     </Grid>

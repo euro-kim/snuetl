@@ -6,7 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import httpx
 
@@ -56,7 +57,7 @@ def installation_source() -> str:
     url = str(info["url"])
     parts = urlsplit(url)
     if parts.scheme == "file":
-        return str(Path(unquote(parts.path)))
+        return str(Path(url2pathname(("//" + parts.netloc if parts.netloc else "") + parts.path)))
     vcs = info.get("vcs_info")
     if isinstance(vcs, dict) and vcs.get("vcs"):
         return f"{vcs['vcs']}+{url}"
@@ -96,7 +97,7 @@ def _update_spec() -> str | None:
     url = str(info["url"])
     parts = urlsplit(url)
     if parts.scheme == "file":
-        path = Path(unquote(parts.path))
+        path = Path(url2pathname(("//" + parts.netloc if parts.netloc else "") + parts.path))
         if not path.exists():
             raise UpdateError(f"the original installation source no longer exists: {path}")
         return str(path)

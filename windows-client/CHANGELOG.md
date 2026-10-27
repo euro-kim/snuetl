@@ -1,5 +1,13 @@
 # Windows client releases
 
+## 0.9.7
+
+- 한국어 기본 UI: 학습 현황, 공지·마감, 계정·동기화·알림 설정, 업데이트, 트레이 메뉴와 파일 활동 표시.
+- 반복적인 설명을 줄이고 실제 조작에 필요한 안내를 간결하게 정리.
+- 기본 SNU 로고를 투명 모서리와 둥근 흰색 바탕으로 표시. 기존 SNU 아이콘은 자동 재생성하고 사용자 지정 이미지는 유지.
+- Windows 로컬 소스 설치의 `file:///C:/...` 경로를 올바르게 변환하여 CLI 업데이트 오류 수정.
+- 7개 아이콘 크기의 투명 모서리 및 불투명 중심 검증, 한국어 UI 렌더링 및 Cloud Files 통합 검증.
+
 ## 0.9.6
 
 - Remove historical Windows Credential Manager entries when replacing or disconnecting an eTL key, including entries left behind by upgrades.

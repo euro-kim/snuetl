@@ -90,12 +90,25 @@ internal static class Branding
         {
             using var bitmap = new Bitmap(size, size, PixelFormat.Format32bppArgb);
             using var g = Graphics.FromImage(bitmap);
-            g.Clear(whiteBackground ? Color.White : Color.Transparent);
+            g.Clear(Color.Transparent);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (whiteBackground)
+            {
+                // Keep the taskbar visible at the corners; the white disc keeps
+                // the blue seal readable on both light and dark taskbars.
+                g.FillEllipse(Brushes.White, 0.5f, 0.5f, size - 1f, size - 1f);
+            }
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            var bounds = whiteBackground ? size - (size <= 32 ? 2f : size * 0.08f) : size;
+            var bounds = whiteBackground ? size * 0.70f : size;
             var scale = Math.Min(bounds / artwork.Width, bounds / artwork.Height);
             var w = artwork.Width * scale; var h = artwork.Height * scale;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            if (whiteBackground)
+            {
+                using var clip = new GraphicsPath();
+                clip.AddEllipse(0.5f, 0.5f, size - 1f, size - 1f);
+                g.SetClip(clip);
+            }
             g.DrawImage(original, new RectangleF((size - w) / 2, (size - h) / 2, w, h), artwork, GraphicsUnit.Pixel);
             using var png = new MemoryStream(); bitmap.Save(png, ImageFormat.Png); return png.ToArray();
         }).ToArray();

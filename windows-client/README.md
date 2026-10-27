@@ -1,5 +1,17 @@
 # SNUETL for Windows
 
+## 한국어 사용 안내 · 0.9.7
+
+설정에서 eTL 계정을 연결하면 수업 파일을 Windows 파일 탐색기에서 열 수 있습니다.
+**지금 동기화**로 수동 확인하거나 **설정 → 일반 → 자동 동기화 간격**에서
+1~1,440분 간격을 지정하세요. 서버가 변경 즉시 알리는 푸시 방식이 아니라 주기적 확인 방식입니다.
+온라인 전용 파일은 열 때 내려받으며, 오프라인에서도 필요한 파일은 탐색기의
+**항상 이 장치에 유지**로 보관할 수 있습니다. 로컬 수정 내용은 eTL에 업로드하지 않습니다.
+
+학습 현황·공지·마감 일정·설정·트레이 메뉴가 한국어로 표시됩니다. 기본 SNU 로고는
+투명 모서리를 가진 둥근 흰색 바탕으로 표시하며, 이전 SNU 아이콘은 업데이트 후 자동 교체됩니다.
+대학교의 공식 클라이언트가 아닌 개인 개발 프로젝트입니다.
+
 > **Experimental / testing only.** This is an unofficial project, not affiliated with, endorsed by, or supported by Seoul National University. Project code is MIT-licensed; see the [license and disclaimer](../README.md#license-and-disclaimer).
 
 
@@ -96,11 +108,11 @@ update, pin/free-space and preservation events. Open the gear button for the
 separate General, Appearance, and About & updates settings pages. General allows
 a sync interval of 1–1,440 minutes; choosing Done reschedules the next check immediately.
 
-First-run setup and Appearance offer the default SNUETL icon, a local PNG/JPEG/BMP/ICO
-(up to 10 MB), or an on-demand download of the
+First-run setup and Appearance offer the bundled default SNU logo, an alternative S-letter icon, or a local PNG/JPEG/BMP/ICO
+(up to 10 MB). The bundled artwork comes from the
 [SNU logo](https://www.snu.ac.kr/webdata/uploads/kor/image/2022/09/snu_ui_download.png).
-Images retain their proportions and are converted into six ICO sizes. The SNU
-logo uses an opaque white background so it stays visible on dark taskbars. The same
+Images retain their proportions and are converted into seven ICO sizes. The SNU
+logo uses a circular white background with transparent corners so it stays visible on dark taskbars. The same
 icon is applied to Explorer and the notification area. Content-based filenames
 refresh Windows' icon cache when the image changes. Theme colors follow the
 [SNU identity guide](https://snurnd.snu.ac.kr/en/?q=node/29): blue `#0F0F70`,

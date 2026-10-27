@@ -45,10 +45,10 @@ public sealed record AccountStatus
     [JsonPropertyName("manual")]
     public bool Manual { get; init; }
     public string ExpiryDescription => Manual
-        ? "API key expiration is set in Canvas. Check Account Settings → Approved Integrations for its expiry; SNUETL cannot read it from a pasted key."
+        ? "API 키 만료일은 eTL 계정 설정에서 확인하세요. 직접 입력한 키의 만료일은 조회할 수 없습니다."
         : DateTimeOffset.TryParse(ExpiresAt, out var expiry)
-            ? $"API key expires {expiry.LocalDateTime:yyyy-MM-dd HH:mm} (local time). Sign in again when it expires. A revoked key may stop working sooner."
-            : "Automatic login requests a key valid for about 365 days. Its saved expiration date will appear here after connection.";
+            ? $"API 키 만료: {expiry.LocalDateTime:yyyy-MM-dd HH:mm} · 만료 시 다시 로그인하세요. 폐기된 키는 더 일찍 작동을 멈출 수 있습니다."
+            : "계정 연결 후 API 키 만료일이 표시됩니다.";
 }
 
 public sealed record Manifest

@@ -24,10 +24,10 @@ public sealed record ActivityEntry(DateTimeOffset Time, string Action, string Pa
         }
     }
     public bool Unavailable { get; init; }
-    public string StatusLabel => Unavailable ? Action + " · Unavailable" : Action;
+    public string StatusLabel => KoreanText.Status(Action) + (Unavailable ? " · 사용 불가" : "");
     public string DirectoryLabel => System.IO.Path.GetDirectoryName(Path)?.Replace('\\', '/') ?? "";
     public string Course => CourseName ?? System.Text.RegularExpressions.Regex.Replace(Path.Replace('\\', '/').Split('/').ElementAtOrDefault(1) ?? "", @"--\d+$", "");
-    public string TimeLabel => Time.LocalDateTime.ToString("MMM d · HH:mm:ss");
+    public string TimeLabel => Time.LocalDateTime.ToString("MM-dd · HH:mm:ss");
     public string Name => string.IsNullOrEmpty(Path) ? "SNUETL" : System.IO.Path.GetFileName(Path);
 }
 

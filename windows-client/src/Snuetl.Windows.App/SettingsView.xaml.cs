@@ -12,23 +12,23 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     private bool busy;
     private string notificationCourse = "*";
     private readonly Dictionary<string,string[]> selections = [];
-    private static readonly (string Key,string Label)[] Categories = [("announcements","Announcements"),("assignments","Assignments and deadline changes"),("reminders","Deadline reminders"),("grades","Grades and feedback"),("discussions","Discussion activity"),("files","File updates")];
+    private static readonly (string Key,string Label)[] Categories = [("announcements","공지사항"),("assignments","과제 및 마감 변경"),("reminders","마감 사전 알림"),("grades","성적 및 피드백"),("discussions","토론 활동"),("files","파일 업데이트")];
     public SettingsView(ClientController controller)
     {
         InitializeComponent(); this.controller = controller;
         StartupCheck.IsChecked = controller.Settings.StartWithWindows;
         IntervalBox.Text = controller.Settings.RefreshMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        WelcomeText.Text = controller.Settings.SetupCompleted ? "SNUETL settings" : "Welcome to SNUETL";
-        VersionText.Text = $"Version {Branding.Version}";
+        WelcomeText.Text = controller.Settings.SetupCompleted ? "SNUETL 설정" : "SNUETL 시작하기";
+        VersionText.Text = $"버전 {Branding.Version}";
         selections["*"] = controller.Settings.Notifications.Categories;
         foreach (var pair in controller.Settings.Notifications.Courses) selections[pair.Key] = pair.Value;
-        NotificationCourse.ItemsSource = new[] { new AcademicCourse { Id = "*", Name = "All courses (default)" } }.Concat(controller.Academic.Courses);
+        NotificationCourse.ItemsSource = new[] { new AcademicCourse { Id = "*", Name = "모든 강좌 기본값" } }.Concat(controller.Academic.Courses);
         ReminderHours.Text = string.Join(", ",controller.Settings.Notifications.ReminderHours);
         NotificationCourse.SelectedIndex = 0;
-        StartupStatusText.Text = SettingsStore.StartupStatus;
-        NotificationStatus.Text = NativeNotifications.Status;
+        StartupStatusText.Text = KoreanText.Status(SettingsStore.StartupStatus);
+        NotificationStatus.Text = KoreanText.Status(NativeNotifications.Status);
         ComponentDescription.Text = SignInAddon.Description;
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Downloads when you choose automatic login";
+        ComponentStatus.Text = SignInAddon.Installed ? "설치됨" : "자동 로그인 시 설치됩니다";
         RefreshGitHubAccess();
         Render(controller.Status); UpdateIcon();
         Loaded += (_, _) => { controller.LoginProgressChanged += LoginProgressChanged; RenderLoginProgress(); };
@@ -37,8 +37,8 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     public void Render(ClientStatus status)
     {
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed — ready for automatic login" : "Downloads when you choose automatic login";
-        AccountText.Text = status.Account; RootText.Text = status.Root;
+        ComponentStatus.Text = SignInAddon.Installed ? "설치됨 · 자동 로그인 사용 가능" : "자동 로그인 시 설치됩니다";
+        AccountText.Text = KoreanText.Status(status.Account); RootText.Text = status.Root;
         AccountExpiryText.Text = controller.AccountExpiryDescription;
         var connected = status.Account.StartsWith("Connected", StringComparison.Ordinal);
         SignInPanel.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
@@ -82,44 +82,44 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         using var icon = Branding.LoadIcon(64);
         var source = Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions()); source.Freeze();
         Logo.Source = source; IconPreview.Source = source;
-        IconChoiceText.Text = controller.Settings.IconChoice switch { "SNU" => "SNU logo", "Custom" => "Your custom image", _ => "SNUETL default" };
+        IconChoiceText.Text = controller.Settings.IconChoice switch { "SNU" => "SNU 로고 기본값", "Custom" => "사용자 지정 이미지", _ => "S 문자 아이콘" };
     }
     private async Task RunAsync(Func<Task> operation, string progress, string success)
     {
         if (busy || controller.IsSigningIn) return; busy = true; FeedbackText.Text = progress; RenderLoginProgress();
         try { await operation(); FeedbackText.Text = success; UpdateIcon(); }
-        catch (OperationCanceledException) { FeedbackText.Text = "Cancelled. You can retry when ready."; }
+        catch (OperationCanceledException) { FeedbackText.Text = "취소했습니다. 다시 시도할 수 있습니다."; }
         catch (Exception e) { FeedbackText.Text = e.Message; }
         finally { busy = false; Render(controller.Status); }
     }
     private async void Connect_Click(object sender, RoutedEventArgs e)
     {
-        await RunAsync(controller.ConnectAutomaticallyAsync, "Preparing automatic login…", "Connected. Your courses are syncing in the background.");
+        await RunAsync(controller.ConnectAutomaticallyAsync, "자동 로그인 준비 중…", "연결했습니다. 수업 자료를 동기화합니다.");
         Render(controller.Status);
     }
     private async void ManualConnect_Click(object sender, RoutedEventArgs e)
-    { var token = TokenBox.Password; TokenBox.Clear(); await RunAsync(() => controller.ConnectManualAsync(token), "Checking your token…", "Account connected."); }
-    private async void SignOut_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.DisconnectAsync, "Signing out…", "Signed out.");
+    { var token = TokenBox.Password; TokenBox.Clear(); await RunAsync(() => controller.ConnectManualAsync(token), "API 키 확인 중…", "계정을 연결했습니다."); }
+    private async void SignOut_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.DisconnectAsync, "로그아웃 중…", "로그아웃했습니다.");
     private void Open_Click(object sender, RoutedEventArgs e) => controller.OpenFolder();
     private void TokenSettings_Click(object sender, RoutedEventArgs e) => ClientController.OpenTokenSettings();
     private async void Browse_Click(object sender, RoutedEventArgs e)
     {
-        using var dialog = new Forms.FolderBrowserDialog { Description = "Choose your SNUETL sync folder", UseDescriptionForTitle = true, InitialDirectory = controller.Settings.SyncRoot };
-        if (dialog.ShowDialog() == Forms.DialogResult.OK) await RunAsync(() => controller.ChangeRootAsync(dialog.SelectedPath), "Setting up your folder…", "Sync folder saved.");
+        using var dialog = new Forms.FolderBrowserDialog { Description = "동기화 폴더 선택", UseDescriptionForTitle = true, InitialDirectory = controller.Settings.SyncRoot };
+        if (dialog.ShowDialog() == Forms.DialogResult.OK) await RunAsync(() => controller.ChangeRootAsync(dialog.SelectedPath), "폴더 설정 중…", "동기화 폴더를 저장했습니다.");
     }
-    private async void DefaultIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("Default"), "Updating your icon…", "Default icon applied to Explorer and the tray.");
-    private async void SnuIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("SNU"), "Applying the SNU logo…", "SNU logo applied to Explorer and the tray.");
+    private async void DefaultIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("Default"), "아이콘 적용 중…", "S 문자 아이콘을 적용했습니다.");
+    private async void SnuIcon_Click(object sender, RoutedEventArgs e) => await RunAsync(() => controller.SetAppearanceAsync("SNU"), "SNU 로고 적용 중…", "SNU 로고를 적용했습니다.");
     private async void CustomIcon_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Choose your SNUETL icon", Filter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.ico", CheckFileExists = true };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true) await RunAsync(() => controller.SetAppearanceAsync("Custom", dialog.FileName), "Preparing your icon…", "Custom icon applied to Explorer and the tray.");
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "아이콘 이미지 선택", Filter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.ico", CheckFileExists = true };
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true) await RunAsync(() => controller.SetAppearanceAsync("Custom", dialog.FileName), "아이콘 준비 중…", "사용자 지정 아이콘을 적용했습니다.");
     }
     internal bool SavePreferences()
     {
-        if (busy && !controller.IsSigningIn) { FeedbackText.Text = "Please wait for the current operation to finish."; return false; }
+        if (busy && !controller.IsSigningIn) { FeedbackText.Text = "진행 중인 작업이 끝날 때까지 기다려 주세요."; return false; }
         if (!int.TryParse(IntervalBox.Text, out var minutes) || minutes is < 1 or > 1440)
         {
-            FeedbackText.Text = "Enter a whole number from 1 to 1,440 minutes.";
+            FeedbackText.Text = "1~1,440 사이의 정수를 입력하세요.";
             IntervalBox.Focus();
             return false;
         }
@@ -127,7 +127,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         foreach (var part in ReminderHours.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (!double.TryParse(part, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var hours) || !double.IsFinite(hours) || hours <= 0 || hours > 720)
-            { FeedbackText.Text = "Reminder offsets must be hours greater than 0 and no more than 720."; return false; }
+            { FeedbackText.Text = "알림 시간은 0보다 크고 720 이하인 값으로 입력하세요."; return false; }
             offsets.Add(hours);
         }
         CaptureCategories();
@@ -149,60 +149,60 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         foreach (var (key,label) in Categories) NotificationChoices.Children.Add(new System.Windows.Controls.CheckBox { Content = label, Tag = key, IsChecked = selected.Contains(key), Margin = new Thickness(0,6,0,6) });
     }
     private void RepairStartup_Click(object sender, RoutedEventArgs e)
-    { SettingsStore.ConfigureStartup(StartupCheck.IsChecked == true); StartupStatusText.Text = SettingsStore.StartupStatus; }
+    { SettingsStore.ConfigureStartup(StartupCheck.IsChecked == true); StartupStatusText.Text = KoreanText.Status(SettingsStore.StartupStatus); }
     private async void InstallAddon_Click(object sender, RoutedEventArgs e)
     {
-        if (DownloadConsent.IsChecked != true) { FeedbackText.Text = "Select the optional download checkbox first."; return; }
-        await RunAsync(controller.InstallSignInAsync, "Downloading and verifying automatic sign-in…", "Automatic sign-in installed.");
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Downloads when you choose automatic login";
+        if (DownloadConsent.IsChecked != true) { FeedbackText.Text = "구성 요소 다운로드 항목을 선택하세요."; return; }
+        await RunAsync(controller.InstallSignInAsync, "자동 로그인 구성 요소 다운로드 중…", "자동 로그인 구성 요소를 설치했습니다.");
+        ComponentStatus.Text = SignInAddon.Installed ? "설치됨" : "자동 로그인 시 설치됩니다";
     }
     private async void LocalAddon_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "SNUETL sign-in component|SNUETL-SignIn-*.zip", CheckFileExists = true };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true) await RunAsync(() => controller.InstallSignInFromArchiveAsync(dialog.FileName), "Verifying sign-in component…", "Automatic sign-in installed.");
-        ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed";
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true) await RunAsync(() => controller.InstallSignInFromArchiveAsync(dialog.FileName), "구성 요소 확인 중…", "자동 로그인 구성 요소를 설치했습니다.");
+        ComponentStatus.Text = SignInAddon.Installed ? "설치됨" : "설치되지 않음";
     }
     private async void RemoveAddon_Click(object sender, RoutedEventArgs e)
-    { await RunAsync(SignInAddon.RemoveAsync, "Removing optional component…", "Automatic sign-in removed. Your account is unchanged."); ComponentStatus.Text = SignInAddon.Installed ? "Installed" : "Not installed"; }
-    private void Done_Click(object sender, RoutedEventArgs e) { if (SavePreferences()) FeedbackText.Text = "Settings saved."; }
+    { await RunAsync(SignInAddon.RemoveAsync, "구성 요소 제거 중…", "구성 요소를 제거했습니다. 계정 연결은 유지됩니다."); ComponentStatus.Text = SignInAddon.Installed ? "설치됨" : "설치되지 않음"; }
+    private void Done_Click(object sender, RoutedEventArgs e) { if (SavePreferences()) FeedbackText.Text = "설정을 저장했습니다."; }
     private void RefreshGitHubAccess()
     {
-        try { GitHubAccessStatus.Text = string.IsNullOrEmpty(GitHubCredential.Read()) ? "No GitHub release token saved" : "Private GitHub release access is saved"; }
-        catch (Exception ex) { GitHubAccessStatus.Text = "Credential storage unavailable: " + ex.Message; }
+        try { GitHubAccessStatus.Text = string.IsNullOrEmpty(GitHubCredential.Read()) ? "저장된 GitHub 토큰 없음" : "GitHub 토큰 저장됨"; }
+        catch (Exception ex) { GitHubAccessStatus.Text = "자격 증명 저장소 오류: " + ex.Message; }
     }
     private async void SaveGitHub_Click(object sender, RoutedEventArgs e)
     {
         var token = GitHubTokenBox.Password; GitHubTokenBox.Clear();
-        await RunAsync(async () => { GitHubCredential.Save(token); await controller.CheckForUpdatesAsync(true); }, "Saving GitHub access…", "Release access saved in Windows Credential Manager.");
+        await RunAsync(async () => { GitHubCredential.Save(token); await controller.CheckForUpdatesAsync(true); }, "GitHub 토큰 저장 중…", "Windows 자격 증명 관리자에 저장했습니다.");
         RefreshGitHubAccess(); Render(controller.Status);
     }
     private void RemoveGitHub_Click(object sender, RoutedEventArgs e)
-    { try { GitHubCredential.Remove(); GitHubAccessStatus.Text = "Release access removed"; } catch (Exception ex) { FeedbackText.Text = ex.Message; } }
+    { try { GitHubCredential.Remove(); GitHubAccessStatus.Text = "GitHub 토큰을 제거했습니다"; } catch (Exception ex) { FeedbackText.Text = ex.Message; } }
     private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
-    { await RunAsync(() => controller.CheckForUpdatesAsync(true), "Checking GitHub releases…", "Update check complete."); Render(controller.Status); }
+    { await RunAsync(() => controller.CheckForUpdatesAsync(true), "새 버전 확인 중…", "업데이트 확인을 마쳤습니다."); Render(controller.Status); }
     private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
     {
         if (!SavePreferences()) return;
         UpdateProgress.Visibility = Visibility.Visible;
-        var progress = new Progress<double>(value => { UpdateProgress.Value = value * 100; FeedbackText.Text = $"Downloading update… {value:P0}"; });
-        await RunAsync(() => controller.InstallUpdateAsync(progress), "Downloading and verifying the update…", "Setup is open. SNUETL will close when installation begins.");
+        var progress = new Progress<double>(value => { UpdateProgress.Value = value * 100; FeedbackText.Text = $"업데이트 다운로드 중… {value:P0}"; });
+        await RunAsync(() => controller.InstallUpdateAsync(progress), "업데이트 다운로드 및 확인 중…", "설치 프로그램을 열었습니다. 설치가 시작되면 앱이 종료됩니다.");
         UpdateProgress.Visibility = Visibility.Collapsed;
     }
     private void Uninstall_Click(object sender, RoutedEventArgs e)
     {
         if (!SavePreferences()) return;
-        try { InstalledProduct.Uninstall(); FeedbackText.Text = "The Windows uninstaller is open. Downloaded files and local folders will be preserved."; }
+        try { InstalledProduct.Uninstall(); FeedbackText.Text = "제거 프로그램을 열었습니다. 내려받은 파일과 로컬 폴더는 보존됩니다."; }
         catch (Exception ex) { FeedbackText.Text = ex.Message; }
     }
     private void Update_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Choose a newer SNUETL setup file", Filter = "SNUETL setup|SNUETLSetup*.exe", CheckFileExists = true };
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "새 버전 설치 파일 선택", Filter = "SNUETL setup|SNUETLSetup*.exe", CheckFileExists = true };
         if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
         try
         {
             if (!SavePreferences()) return;
             Process.Start(new ProcessStartInfo(dialog.FileName) { UseShellExecute = true });
-            FeedbackText.Text = "Setup is open. SNUETL will close automatically when the update begins.";
+            FeedbackText.Text = "설치 프로그램을 열었습니다. 업데이트 시 앱이 종료됩니다.";
         }
         catch (Exception exception) { FeedbackText.Text = exception.Message; }
     }

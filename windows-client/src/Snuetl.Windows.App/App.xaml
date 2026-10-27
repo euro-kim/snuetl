@@ -5,7 +5,7 @@
         <SolidColorBrush x:Key="BrandBrush" Color="#0F0F70"/>
         <SolidColorBrush x:Key="MutedBrush" Color="#666666"/>
         <Style TargetType="Window">
-            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontFamily" Value="Malgun Gothic, Segoe UI"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="#20243A"/>
             <Setter Property="Background" Value="#F5F5F8"/>

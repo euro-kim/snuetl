@@ -56,6 +56,22 @@ internal static class Program
         CloudFilesProvider? provider = null;
         try
         {
+            using (var logoStream = typeof(Branding).Assembly.GetManifestResourceStream("Snuetl.Windows.Assets.snu-logo.png")!)
+            using (var logo = System.Drawing.Image.FromStream(logoStream))
+            {
+                var rounded = Branding.EncodeIcon(logo, whiteBackground: true);
+                var sizes = new[] { 16, 20, 24, 32, 48, 64, 256 };
+                for (var i = 0; i < sizes.Length; i++)
+                {
+                    var length = BitConverter.ToInt32(rounded, 6 + i * 16 + 8);
+                    var offset = BitConverter.ToInt32(rounded, 6 + i * 16 + 12);
+                    using var png = new MemoryStream(rounded, offset, length);
+                    using var frame = new System.Drawing.Bitmap(png);
+                    Check(frame.GetPixel(0, 0).A == 0 && frame.GetPixel(sizes[i] - 1, sizes[i] - 1).A == 0, "Rounded SNU icon corners must be transparent at every size");
+                    Check(frame.GetPixel(sizes[i] / 2, sizes[i] / 2).A == 255, "SNU icon must retain an opaque readable center");
+                    frame.Save(Path.Combine(output, $"snu-{sizes[i]}.png"));
+                }
+            }
             using var original = new System.Drawing.Bitmap(400, 200);
             using var g = System.Drawing.Graphics.FromImage(original); g.Clear(System.Drawing.Color.Blue);
             if (args.Contains("--online-logo"))
@@ -71,7 +87,7 @@ internal static class Program
                 using var snuIcon = new System.Drawing.Icon(icoData, 32, 32);
                 Check(snuIcon.Width == 32, "Official SNU logo download/conversion failed");
                 using var preview = snuIcon.ToBitmap();
-                Check(preview.GetPixel(0, 0).ToArgb() == System.Drawing.Color.White.ToArgb(), "SNU icon must have an opaque white background");
+                Check(preview.GetPixel(0, 0).A == 0, "SNU icon must have transparent corners");
                 preview.Save(Path.Combine(output, "snu-tray-icon.png"));
                 foreach (var size in new[] {16,20,24,32,48,64,256})
                 {
@@ -132,7 +148,7 @@ internal static class Program
             var reloaded = store.Load(); Check(reloaded.IconChoice == "Custom" && !reloaded.StartWithWindows, "Settings must survive reload");
             await using (var controller = new ClientController(store))
             {
-                for (var i = 0; i < 40; i++) controller.Activity.Add(i % 2 == 0 ? "Downloaded to this device" : "Updated from SNU eTL", $"2026 Fall/Computer Science/Lecture {i + 1:00}.pdf");
+                for (var i = 0; i < 40; i++) controller.Activity.Add(i % 2 == 0 ? "Downloaded to this device" : "Updated from SNU eTL", $"2026학년도 2학기/컴퓨터과학 예시 강좌/강의자료 {i + 1:00}.pdf");
                 var status = new ClientStatus("Up to date", "Connected", sync, DateTimeOffset.Now, DateTimeOffset.Now.AddMinutes(15), 128, null);
                 using var timer = new PeriodicTimer(TimeSpan.FromMinutes(15));
                 var timerField = typeof(ClientController).GetField("refreshTimer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
@@ -170,7 +186,7 @@ internal static class Program
                 Check(scroll.VerticalOffset < previousOffset, "Mouse wheel did not scroll activity");
                 var heldOffset = scroll.VerticalOffset;
                 var heldCount = activityList.Items.Count;
-                controller.Activity.Add("Updated from SNU eTL", "2026 Fall/Computer Science/New lecture.pdf");
+                controller.Activity.Add("Updated from SNU eTL", "2026학년도 2학기/컴퓨터과학 예시 강좌/새 강의자료.pdf");
                 await Task.Delay(80); activity.UpdateLayout();
                 Check(activityList.Items.Count == heldCount + 1 && scroll.VerticalOffset >= heldOffset, "New activity jumped the reader back to the beginning");
                 var fileButton = FindByTag<System.Windows.Controls.Button>(activityList, b => b.Tag is ActivityEntry);
@@ -217,9 +233,9 @@ internal static class Program
                     Check(!controller.IsSigningIn,"Login remains busy after cancellation");
                 }
                 finally { gate.Release(); }
-                var academic = new AcademicSnapshot { GeneratedAt = DateTimeOffset.Now, Courses = [new AcademicCourse { Id = "7", Name = "Computer Science", Url = "https://myetl.snu.ac.kr/courses/7" }],
-                    Datasets = new() { ["announcements"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "Welcome to the new semester", course_name = "Computer Science", summary = "Lecture materials are now available in your SNUETL folder.", url = "https://myetl.snu.ac.kr/courses/7" })],
-                    ["upcoming"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "Assignment 1 · Algorithm analysis", course_name = "Computer Science", due_at = DateTimeOffset.Now.AddDays(1).ToString("O"), url = "https://myetl.snu.ac.kr/courses/7" })] } };
+                var academic = new AcademicSnapshot { GeneratedAt = DateTimeOffset.Now, Courses = [new AcademicCourse { Id = "7", Name = "컴퓨터과학 예시 강좌", Url = "https://myetl.snu.ac.kr/courses/7" }],
+                    Datasets = new() { ["announcements"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "새 학기 수업 자료 안내", course_name = "컴퓨터과학 예시 강좌", summary = "수업 자료가 동기화 폴더에 추가되었습니다. 파일 탐색기에서 열어 보세요.", url = "https://myetl.snu.ac.kr/courses/7" })],
+                    ["upcoming"] = [System.Text.Json.JsonSerializer.SerializeToElement(new { title = "과제 1 · 알고리즘 분석", course_name = "컴퓨터과학 예시 강좌", due_at = DateTimeOffset.Now.AddDays(1).ToString("O"), url = "https://myetl.snu.ac.kr/courses/7" })] } };
                 typeof(ClientController).GetProperty("Academic")!.SetValue(controller,academic);
                 var feedTabs = (System.Windows.Controls.TabControl)activity.FindName("FeedTabs");
                 var academicList = (System.Windows.Controls.ListBox)activity.FindName("AcademicList");
@@ -228,7 +244,7 @@ internal static class Program
                 var academicButton = FindByTag<System.Windows.Controls.Button>(academicList, b => b.Tag is MiniPanelItem);
                 Check(academicButton is { IsEnabled: true, Focusable: true }, "Course alert must be accessible and openable");
                 feedTabs.SelectedIndex = 1; Render(activity, Path.Combine(output, "mini-announcements.png"));
-                Check(academicList.Items.Count == 1 && ((MiniPanelItem)academicList.Items[0]).Course == "Computer Science", "Announcement tab lost its course label");
+                Check(academicList.Items.Count == 1 && ((MiniPanelItem)academicList.Items[0]).Course == "컴퓨터과학 예시 강좌", "Announcement tab lost its course label");
                 feedTabs.SelectedIndex = 2; Render(activity, Path.Combine(output, "mini-deadlines.png"));
                 Check(academicList.Items.Count == 1 && ((MiniPanelItem)academicList.Items[0]).Category == "deadlines", "Deadline tab contains unrelated activity");
                 activity.Hide();

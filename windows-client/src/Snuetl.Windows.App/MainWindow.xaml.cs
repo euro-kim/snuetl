@@ -45,14 +45,14 @@ public partial class MainWindow : Window
     public void Render(ClientStatus status)
     {
         SyncButton.IsEnabled = !controller.IsRefreshing;
-        SyncLabel.Text = controller.IsRefreshing ? "Syncing…" : "Sync now";
-        StateText.Text = status.State;
-        AccountText.Text = $"{status.ItemCount} course files · {status.Account}";
-        RefreshText.Text = status.LastRefresh is null ? "Waiting for the first sync" : $"Last checked {status.LastRefresh.Value.LocalDateTime:g}";
+        SyncLabel.Text = controller.IsRefreshing ? "동기화 중…" : "지금 동기화";
+        StateText.Text = KoreanText.Status(status.State);
+        AccountText.Text = $"수업 파일 {status.ItemCount}개 · {KoreanText.Status(status.Account)}";
+        RefreshText.Text = status.LastRefresh is null ? "첫 동기화 대기 중" : $"최근 확인 {status.LastRefresh.Value.LocalDateTime:yyyy-MM-dd HH:mm}";
         ErrorText.Text = status.Error ?? "";
         ErrorText.Visibility = status.Error is null ? Visibility.Collapsed : Visibility.Visible;
         UpdateBanner.Visibility = controller.Settings.AvailableUpdate is null ? Visibility.Collapsed : Visibility.Visible;
-        UpdateBannerText.Text = controller.Settings.AvailableUpdate is { } update ? $"SNUETL {update.Version} is available" : "";
+        UpdateBannerText.Text = controller.Settings.AvailableUpdate is { } update ? $"SNUETL {update.Version} 업데이트 가능" : "";
     }
     private void Activity_MouseWheel(object sender, MouseWheelEventArgs e)
     {
@@ -87,7 +87,7 @@ public partial class MainWindow : Window
         var files = FeedTabs.SelectedIndex == 3;
         ActivityList.Visibility = files ? Visibility.Visible : Visibility.Collapsed;
         AcademicList.Visibility = files ? Visibility.Collapsed : Visibility.Visible;
-        if (files) { EmptyText.Text = "No file activity yet. Saved announcement copies are kept out of this feed."; ReloadActivity(); }
+        if (files) { EmptyText.Text = "아직 파일 활동이 없습니다."; ReloadActivity(); }
         else ReloadAcademic(resetScroll:true);
     }
     private void ReloadAcademic(bool resetScroll = false)
@@ -112,9 +112,9 @@ public partial class MainWindow : Window
         }
         EmptyText.Text = FeedTabs.SelectedIndex switch
         {
-            1 => "No announcements yet. Sync to check your courses.",
-            2 => "No pending deadlines. You're caught up!",
-            _ => "No recent course alerts. Announcements and approaching deadlines will appear here."
+            1 => "공지사항이 없습니다. 동기화하여 확인하세요.",
+            2 => "예정된 마감이 없습니다.",
+            _ => "최근 알림이 없습니다. 새 공지와 다가오는 마감이 여기에 표시됩니다."
         };
         EmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
