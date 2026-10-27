@@ -54,50 +54,42 @@
                                 <TextBlock Text="{local:Translate 'eTL 계정'}" Style="{StaticResource SectionTitle}"/>
                                 <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <TextBlock x:Name="AccountExpiryText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
-                                <StackPanel x:Name="SignInPanel">
-                                    <Border x:Name="AutomaticCard" BorderBrush="#DADAE8" BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,0,12"><StackPanel>
-                                        <TextBlock Text="{local:Translate '자동으로 연결'}" FontWeight="SemiBold" FontSize="16"/>
-                                        <TextBlock Text="{local:Translate '임시 브라우저를 추가로 다운로드합니다. 서울대학교 계정으로 로그인하면 연결을 확인합니다.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
-                                        <Button Content="{local:Translate '자동으로 연결'}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
-                                    </StackPanel></Border>
-                                    <Border x:Name="ManualCard" BorderBrush="#DADAE8" BorderThickness="1" CornerRadius="10" Padding="16"><StackPanel>
-                                        <TextBlock Text="{local:Translate 'API 키로 직접 연결'}" FontWeight="SemiBold" FontSize="16"/>
-                                        <TextBlock Text="{local:Translate '추가 다운로드가 없습니다. 그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
-
-                                        <Expander Header="{local:Translate 'API 키 발급 안내'}" x:Name="ManualGuide">
-                                            <StackPanel Margin="0,12,0,0">
-                                                <Button Content="{local:Translate 'API 키 발급 페이지'}" Click="TokenSettings_Click" HorizontalAlignment="Left"/>
-                                                <TextBlock Text="{local:Translate '1. eTL에서 Account(계정) → Settings(설정)를 엽니다.'}" TextWrapping="Wrap" Margin="0,12,0,8"/>
-                                                <Image Source="Assets/token-step-1.png" MaxWidth="640" Stretch="Uniform"/>
-                                                <TextBlock Text="{local:Translate '2. Approved Integrations에서 New Access Token을 선택합니다.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
-                                                <Image Source="Assets/token-step-2.png" MaxWidth="640" Stretch="Uniform"/>
-                                                <TextBlock Text="{local:Translate '3. Purpose에 SNUETL을 입력하고 만료일을 선택한 뒤 Generate Token을 누릅니다.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
-                                                <Image Source="Assets/token-step-3.png" MaxWidth="640" Stretch="Uniform"/>
-                                                <TextBlock Text="{local:Translate '4. Token 값 전체를 복사하세요. 한 번만 표시됩니다. 아래에 붙여 넣으세요.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
-                                                <Image x:Name="TokenCopyImage" Source="Assets/token-step-4.png" MaxWidth="640" Stretch="Uniform"/>
-                                            </StackPanel>
-                                        </Expander>
-                                        <TextBlock Text="{local:Translate 'API 키 붙여 넣기'}" Margin="0,16,0,8"/>
-                                        <Border Background="#EDEDF7" CornerRadius="6" Padding="12" Margin="0,0,0,10">
-                                            <StackPanel>
-                                                <TextBlock Text="{local:Translate 'API 키 형태 예시 (축약된 가짜 예시 · 사용 불가)'}" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                                                <TextBlock Text="1234~AbCdEf0123…XyZ" FontFamily="Consolas" Margin="0,6,0,2"/>
-                                                <TextBlock Text="AbCdEf01234567…XyZ" FontFamily="Consolas"/>
-                                                <TextBlock Text="{local:Translate '숫자와 ~로 시작하는 키와 긴 문자열 형태의 키를 모두 지원합니다. eTL의 Token 값 전체를 복사하세요. 예시나 … 문자는 입력하지 마세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
-                                            </StackPanel>
-                                        </Border>
-                                        <DockPanel>
-                                            <Button DockPanel.Dock="Right" Content="{local:Translate '붙여 넣기'}" Click="PasteToken_Click" Margin="8,0,0,0"/>
-                                            <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="{local:Translate 'eTL API 키'}"/>
-                                        </DockPanel>
-                                        <TextBlock Text="{local:Translate 'eTL에서 유효한 키로 확인된 후에만 안전하게 저장합니다.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
-                                        <Button Content="{local:Translate '연결 확인 후 저장'}" Click="ManualConnect_Click" HorizontalAlignment="Left"/>
-
-                                    </StackPanel></Border>
-                                </StackPanel>
                                 <Button x:Name="SignOutButton" Content="{local:Translate '로그아웃'}" HorizontalAlignment="Left" Click="SignOut_Click"/>
                             </StackPanel>
                         </Border>
+                        <StackPanel x:Name="SignInPanel">
+                            <Border x:Name="AutomaticCard" Style="{StaticResource Card}"><StackPanel>
+                                <TextBlock Text="{local:Translate '자동으로 연결'}" FontWeight="SemiBold" FontSize="16"/>
+                                <TextBlock Text="{local:Translate '임시 브라우저를 추가로 다운로드합니다. 서울대학교 계정으로 로그인하면 연결을 확인합니다.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+                                <Button Content="{local:Translate '자동으로 연결'}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
+                            </StackPanel></Border>
+                            <Border x:Name="ManualCard" Style="{StaticResource Card}"><StackPanel>
+                                <TextBlock Text="{local:Translate 'API 키로 직접 연결'}" FontWeight="SemiBold" FontSize="16"/>
+                                <TextBlock Text="{local:Translate '추가 다운로드가 없습니다. 그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+
+                                <Expander Header="{local:Translate 'API 키 발급 안내'}" x:Name="ManualGuide">
+                                    <StackPanel Margin="0,12,0,0">
+                                        <Button Content="{local:Translate 'API 키 발급 페이지'}" Click="TokenSettings_Click" HorizontalAlignment="Left"/>
+                                        <TextBlock Text="{local:Translate '1. eTL에서 Account(계정) → Settings(설정)를 엽니다.'}" TextWrapping="Wrap" Margin="0,12,0,8"/>
+                                        <Image Source="Assets/token-step-1.png" MaxWidth="640" Stretch="Uniform"/>
+                                        <TextBlock Text="{local:Translate '2. Approved Integrations에서 New Access Token을 선택합니다.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
+                                        <Image Source="Assets/token-step-2.png" MaxWidth="640" Stretch="Uniform"/>
+                                        <TextBlock Text="{local:Translate '3. Purpose에 SNUETL을 입력하고 만료일을 선택한 뒤 Generate Token을 누릅니다.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
+                                        <Image Source="Assets/token-step-3.png" MaxWidth="640" Stretch="Uniform"/>
+                                        <TextBlock Text="{local:Translate '4. Token 값 전체를 복사하세요. 한 번만 표시됩니다. 아래에 붙여 넣으세요.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
+                                        <Image x:Name="TokenCopyImage" Source="Assets/token-step-4.png" MaxWidth="640" Stretch="Uniform"/>
+                                    </StackPanel>
+                                </Expander>
+                                <TextBlock Text="{local:Translate 'API 키 붙여 넣기'}" Margin="0,16,0,8"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Content="{local:Translate '붙여 넣기'}" Click="PasteToken_Click" Margin="8,0,0,0"/>
+                                    <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="{local:Translate 'eTL API 키'}"/>
+                                </DockPanel>
+                                <TextBlock Text="{local:Translate 'eTL에서 유효한 키로 확인된 후에만 안전하게 저장합니다.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+                                <Button Content="{local:Translate '연결 확인 후 저장'}" Click="ManualConnect_Click" HorizontalAlignment="Left"/>
+
+                            </StackPanel></Border>
+                        </StackPanel>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{local:Translate '동기화 폴더'}" Style="{StaticResource SectionTitle}"/>

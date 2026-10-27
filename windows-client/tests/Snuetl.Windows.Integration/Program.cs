@@ -233,7 +233,7 @@ internal static class Program
                     Render(onboarding, Path.Combine(output, $"connection-{language}.png"));
                     ((System.Windows.Controls.PasswordBox)onboarding.SettingsPage.FindName("TokenBox")).BringIntoView();
                     onboarding.UpdateLayout();
-                    Render(onboarding, Path.Combine(output, $"token-example-{language}.png"));
+                    Render(onboarding, Path.Combine(output, $"token-input-{language}.png"));
                     var guide = (System.Windows.Controls.Expander)onboarding.SettingsPage.FindName("ManualGuide");
                     guide.IsExpanded = true; guide.BringIntoView(); onboarding.UpdateLayout();
                     Render(onboarding, Path.Combine(output, $"token-guide-{language}.png"));

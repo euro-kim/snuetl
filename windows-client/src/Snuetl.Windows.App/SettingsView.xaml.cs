@@ -20,7 +20,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         foreach (System.Windows.Controls.TabItem tab in SettingsTabs.Items)
             if (tab != SettingsTabs.Items[0]) tab.Visibility = Visibility.Collapsed;
         foreach (UIElement child in GeneralStack.Children)
-            if (child != AccountCard) child.Visibility = Visibility.Collapsed;
+            if (child != SignInPanel) child.Visibility = Visibility.Collapsed;
         AutomaticCard.Visibility = automatic ? Visibility.Visible : Visibility.Collapsed;
         ManualCard.Visibility = automatic ? Visibility.Collapsed : Visibility.Visible;
         SaveSettingsButton.Visibility = Visibility.Collapsed;
@@ -60,6 +60,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         AccountExpiryText.Text = controller.AccountExpiryDescription;
         var connected = status.Account.StartsWith("Connected", StringComparison.Ordinal);
         AccountExpiryText.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
+        AccountCard.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
         SignInPanel.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
         SignOutButton.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
         if (status.Error is not null) FeedbackText.Text = L.Status(status.Error);
