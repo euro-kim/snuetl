@@ -276,5 +276,6 @@
   "방법을 선택하기 전에는 브라우저를 다운로드하거나 로그인을 시작하지 않습니다.": "No browser is downloaded and no login starts before you choose a method.",
   "앱을 준비하는 중입니다…": "Preparing the app…",
   "연결되었습니다.": "Connected.",
-  "로그인 브라우저를 제거하지 못했습니다. 설정 → 구성 요소에서 제거할 수 있습니다.": "Sign-in browser could not be removed. You can remove it in Settings → Components."
+  "로그인 브라우저를 제거하지 못했습니다. 설정 → 구성 요소에서 제거할 수 있습니다.": "Sign-in browser could not be removed. You can remove it in Settings → Components.",
+  "← 뒤로": "← Back"
 }

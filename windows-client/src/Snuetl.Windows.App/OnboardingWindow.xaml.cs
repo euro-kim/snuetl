@@ -25,6 +25,7 @@ public partial class OnboardingWindow : Window
     {
         page = new SettingsView(controller);
         page.ConfigureOnboarding(automatic);
+        page.BackRequested += (_, _) => Back_Click(this, new RoutedEventArgs());
         page.ConnectionVerified += (_, _) =>
         {
             if (closed) return;

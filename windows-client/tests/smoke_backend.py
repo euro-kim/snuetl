@@ -17,7 +17,8 @@ def main() -> None:
         {"id": 3, "method": "capabilities"},
         {"id": 4, "method": "auth.auto"},
         {"id": 5, "method": "auth.status"},
-        {"id": 6, "method": "shutdown"},
+        {"id": 6, "method": "academic.snapshot"},
+        {"id": 7, "method": "shutdown"},
     ]
     with tempfile.TemporaryDirectory(prefix="snuetl-smoke-") as data_dir:
         result = subprocess.run(
@@ -34,7 +35,7 @@ def main() -> None:
     if result.returncode != 0:
         raise RuntimeError(f"Packaged backend exited {result.returncode}: {result.stderr}")
     responses = [json.loads(line) for line in result.stdout.splitlines()]
-    assert len(responses) == 6, (responses, result.stderr)
+    assert len(responses) == 7, (responses, result.stderr)
     assert responses[0] == {"id": 1, "ok": True, "result": {"protocol_version": 1}}
     assert responses[1]["id"] == 2 and not responses[1]["ok"]
     assert responses[1]["error"]["code"] == "UNKNOWN_METHOD"
@@ -43,7 +44,8 @@ def main() -> None:
     assert responses[2]["result"]["automatic_signin"] is False
     assert responses[3]["error"]["code"] == "OPTIONAL_COMPONENT_MISSING"
     assert responses[4]["result"]["configured"] is False
-    assert responses[5] == {"id": 6, "ok": True, "result": {"shutdown": True}}
+    assert responses[5]["error"]["code"] == "NOT_CONNECTED"
+    assert responses[6] == {"id": 7, "ok": True, "result": {"shutdown": True}}
     assert not list(executable.parent.rglob("*playwright*"))
     assert not list(executable.parent.rglob("chrome.exe"))
     assert not list(executable.parent.rglob("node.exe"))

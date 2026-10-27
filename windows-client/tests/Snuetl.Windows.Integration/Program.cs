@@ -224,7 +224,7 @@ internal static class Program
                     Check(((Border)chosenPage.FindName("ManualCard")).Visibility == Visibility.Collapsed, "Automatic flow must hide key input");
                     Check(!controller.IsSigningIn && !completed, "Method selection alone must not download, sign in, or finish setup");
                     Render(chooser, Path.Combine(output, $"onboarding-automatic-{language}.png"));
-                    ((System.Windows.Controls.Button)chooser.FindName("BackButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                    ((System.Windows.Controls.Button)((SettingsView)((ContentControl)chooser.FindName("ConnectionHost")).Content).FindName("OnboardingBack")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
                     Check(((StackPanel)chooser.FindName("ChoicePanel")).Visibility == Visibility.Visible, "User must be able to change methods");
                     chooser.Close();
                     Check(!controller.CompleteOnboarding(), "Unverified onboarding must not complete");

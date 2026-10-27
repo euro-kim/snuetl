@@ -197,3 +197,26 @@ def test_auto_login_timeout_has_actionable_error(tmp_path, monkeypatch):
     with pytest.raises(backend.BackendError, match="timed out") as error:
         backend.auth_auto()
     assert error.value.code == "SIGNIN_TIMEOUT"
+
+
+def test_manual_connection_verifies_saved_key_through_real_config(tmp_path, monkeypatch):
+    import httpx
+    monkeypatch.setenv("SNUETL_WINDOWS_DATA_DIR", str(tmp_path))
+    secrets = {}
+    class Vault:
+        def get_password(self, service, account): return secrets.get((service, account))
+        def set_password(self, service, account, value): secrets[service, account] = value
+    monkeypatch.setattr(backend.codex_desktop, "_credential_backend", Vault)
+    monkeypatch.setattr(backend.codex_desktop, "_cleanup_credentials", lambda **kwargs: None)
+    def profile(request):
+        assert request.headers["Authorization"] == "Bearer fake_manual_token_1234567890"
+        return httpx.Response(200, json={"id": 42})
+    client_type = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_type(transport=httpx.MockTransport(profile), **kwargs))
+    monkeypatch.setattr(httpx, "get", lambda url, **kwargs: httpx.Response(200, json={"id": 42}))
+    result = backend.auth_manual("fake_manual_token_1234567890")
+    assert result["connected"]
+    verified = backend.auth_status(verify=True)
+    assert verified["ready"] and verified["valid"]
+    assert backend._config().browser_engine == "chromium"
+    assert backend.codex_desktop._config().browser_engine == "chromium"

@@ -20,9 +20,7 @@
             <TextBlock x:Name="ReadyText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,0"/>
         </StackPanel>
         <Grid x:Name="ConnectionPanel" Visibility="Collapsed">
-            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-            <Button x:Name="BackButton" Content="{local:Translate '다른 연결 방법 선택'}" Click="Back_Click" HorizontalAlignment="Left" Margin="24,12"/>
-            <ContentControl x:Name="ConnectionHost" Grid.Row="1"/>
+            <ContentControl x:Name="ConnectionHost"/>
         </Grid>
     </Grid>
 </Window>

@@ -81,6 +81,7 @@ def _config() -> Config:
         base_url="https://etl.snu.ac.kr/login",
         download_dir=root,
         state_dir=root,
+        browser_engine="chromium",
         browser_channel=None,
         browser_executable_path=None,
         headless=False,

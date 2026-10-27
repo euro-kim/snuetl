@@ -12,8 +12,11 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     private bool busy;
     internal bool IsBusy => busy;
     internal event EventHandler? ConnectionVerified;
+    internal event EventHandler? BackRequested;
+    private void OnboardingBack_Click(object sender, RoutedEventArgs e) => BackRequested?.Invoke(this, EventArgs.Empty);
     internal void ConfigureOnboarding(bool automatic)
     {
+        OnboardingBack.Visibility = Visibility.Visible;
         foreach (System.Windows.Controls.TabItem tab in SettingsTabs.Items)
             if (tab != SettingsTabs.Items[0]) tab.Visibility = Visibility.Collapsed;
         foreach (UIElement child in GeneralStack.Children)
@@ -80,6 +83,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
             if (controller.IsSigningIn) ComponentStatus.Text = L.Status(progress.Message);
         }
         LanguageChoice.IsEnabled = !busy && !controller.IsSigningIn;
+        OnboardingBack.IsEnabled = !busy && !controller.IsSigningIn;
         SetActionButtons(SettingsTabs,!busy && !controller.IsSigningIn);
         InstallUpdateButton.IsEnabled = !busy && !controller.IsSigningIn && controller.Settings.AvailableUpdate is not null;
     }
