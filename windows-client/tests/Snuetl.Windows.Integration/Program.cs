@@ -202,6 +202,9 @@ internal static class Program
                     var guide = (System.Windows.Controls.Expander)onboarding.SettingsPage.FindName("ManualGuide");
                     guide.IsExpanded = true; guide.BringIntoView(); onboarding.UpdateLayout();
                     Render(onboarding, Path.Combine(output, $"token-guide-{language}.png"));
+                    ((System.Windows.Controls.Image)onboarding.SettingsPage.FindName("TokenCopyImage")).BringIntoView();
+                    onboarding.UpdateLayout();
+                    Render(onboarding, Path.Combine(output, $"token-copy-{language}.png"));
                     Check(((System.Windows.Controls.PasswordBox)onboarding.SettingsPage.FindName("TokenBox")).Password.Length == 0, "Token input must start empty");
                     var tokenBox = (System.Windows.Controls.PasswordBox)onboarding.SettingsPage.FindName("TokenBox");
                     tokenBox.Password = "fixture-rejected-token";

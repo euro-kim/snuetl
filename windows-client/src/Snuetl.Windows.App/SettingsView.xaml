@@ -74,10 +74,7 @@
                                                 <TextBlock Text="{local:Translate '3. Purpose에 SNUETL을 입력하고 만료일을 선택한 뒤 Generate Token을 누릅니다.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
                                                 <Image Source="Assets/token-step-3.png" MaxWidth="640" Stretch="Uniform"/>
                                                 <TextBlock Text="{local:Translate '4. Token 값 전체를 복사하세요. 한 번만 표시됩니다. 아래에 붙여 넣으세요.'}" TextWrapping="Wrap" Margin="0,16,0,8"/>
-                                                <Border Background="#EDEDF7" CornerRadius="6" Padding="16"><StackPanel>
-                                                    <TextBlock Text="{local:Translate '예시 토큰 (사용할 수 없는 키)'}"/>
-                                                    <TextBlock Text="Token:  ••••••••••••••••••••••••••••   →   Copy" FontFamily="Consolas" Margin="0,8,0,0"/>
-                                                </StackPanel></Border>
+                                                <Image x:Name="TokenCopyImage" Source="Assets/token-step-4.png" MaxWidth="640" Stretch="Uniform"/>
                                             </StackPanel>
                                         </Expander>
                                         <TextBlock Text="{local:Translate 'API 키 붙여 넣기'}" Margin="0,16,0,8"/>
