@@ -43,7 +43,7 @@ public class MiniPanelFeedTests
             ["announcements"] = [Row(new { course_id=7,announcement_id=3,title="Old news",posted_at=Now.AddDays(-60) })]
         });
         var alert = Assert.Single(MiniPanelFeed.Alerts(snapshot,Now));
-        Assert.StartsWith("마감 지남",alert.TimeLabel);
+        Assert.StartsWith(L.T("마감 지남"),alert.TimeLabel);
         Assert.Single(MiniPanelFeed.Announcements(snapshot));
     }
     [Theory]

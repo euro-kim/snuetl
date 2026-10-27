@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Application xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Snuetl.Windows.App" ShutdownMode="OnExplicitShutdown">
+<Application xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:local="clr-namespace:Snuetl.Windows" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Snuetl.Windows.App" ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <!-- SNU identity palette: RGB 15/15/112, 220/218/178, 102/102/102. -->
         <SolidColorBrush x:Key="BrandBrush" Color="#0F0F70"/>

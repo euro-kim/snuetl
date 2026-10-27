@@ -14,7 +14,7 @@ internal static class SignInAddon
     {
         get { try { return JsonSerializer.Deserialize<Descriptor>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"signin-component.json")), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }); } catch (Exception e) when (e is IOException or JsonException) { return null; } }
     }
-    internal static string Description => Manifest is { } m ? $"자동 로그인 · 다운로드 {m.DownloadBytes / 1048576.0:F1} MB · 설치 후 {m.InstalledBytes / 1048576.0:F1} MB" : "자동 로그인 구성 요소 정보가 없습니다. API 키로 연결할 수 있습니다.";
+    internal static string Description => Manifest is { } m ? L.Pair($"자동 로그인 · 다운로드 {m.DownloadBytes / 1048576.0:F1} MB · 설치 후 {m.InstalledBytes / 1048576.0:F1} MB", $"Automatic login · Download {m.DownloadBytes / 1048576.0:F1} MB · Installed {m.InstalledBytes / 1048576.0:F1} MB") : L.T("자동 로그인 구성 요소 정보가 없습니다. API 키로 연결할 수 있습니다.");
     internal static Task InstallAsync(string? archive = null, string? dataDirectory = null, Descriptor? component = null,
         IProgress<LoginProgress>? progress = null, CancellationToken ct = default) =>
         Task.Run(() => InstallCoreAsync(archive, dataDirectory, component, progress, ct), ct);

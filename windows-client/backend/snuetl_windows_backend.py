@@ -163,7 +163,9 @@ def auth_manual(value: str, origin: str = "https://myetl.snu.ac.kr") -> dict[str
     token_value = value.strip()
     # Accept a copied HTTP header without storing or sending a duplicate prefix.
     token_value = re.sub(r"^(?:Authorization:\s*)?Bearer\s+", "", token_value, flags=re.IGNORECASE).strip()
-    if not TOKEN_PATTERN.fullmatch(token_value):
+    # Canvas also issues opaque, unprefixed access tokens. Syntax is only a
+    # clipboard sanity check; the authenticated profile response is authoritative.
+    if not re.fullmatch(r"[A-Za-z0-9_~+/.=-]{20,512}", token_value):
         raise BackendError("INVALID_TOKEN", "Paste the complete Canvas token copied from SNU eTL. SNUETL handles the authorization header automatically. If the copied key is incomplete, copy it again from eTL.")
     preferred = _validate_origin(origin)
     origins = [
@@ -191,7 +193,10 @@ def auth_manual(value: str, origin: str = "https://myetl.snu.ac.kr") -> dict[str
         raise BackendError("CANVAS_ERROR", f"Canvas returned HTTP {response.status_code}")
     try:
         profile = _http_json(response)
-        user_id = str(profile["id"])
+        raw_id = profile["id"]
+        if isinstance(raw_id, bool) or not str(raw_id).isdigit() or int(raw_id) <= 0:
+            raise ValueError("invalid account id")
+        user_id = str(raw_id)
     except (ValueError, KeyError, TypeError) as exc:
         raise BackendError("CANVAS_ERROR", "Canvas returned an invalid profile") from exc
     _prepare_desktop_helper()

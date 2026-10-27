@@ -15,5 +15,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Assets/snu-logo.png" />
+    <EmbeddedResource Include="Assets/strings.json" />
+    <Resource Include="Assets/token-step-*.png" />
   </ItemGroup>
 </Project>

@@ -8,6 +8,11 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request["method"]
     result = {}
+    if method == "auth.manual" and request.get("params", {}).get("token") == "fixture-rejected-token":
+        print(json.dumps({"id": request["id"], "ok": False, "error": {"code": "TOKEN_REJECTED", "message": "fixture rejection"}}), flush=True)
+        continue
+    if method == "auth.status":
+        result = {"ready": True, "valid": False}
     if method == "content.hydrate":
         os.makedirs(os.environ["SNUETL_WINDOWS_DATA_DIR"], exist_ok=True)
         fd, name = tempfile.mkstemp(dir=os.environ["SNUETL_WINDOWS_DATA_DIR"])

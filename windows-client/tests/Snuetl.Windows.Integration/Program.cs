@@ -192,6 +192,33 @@ internal static class Program
                 var fileButton = FindByTag<System.Windows.Controls.Button>(activityList, b => b.Tag is ActivityEntry);
                 Check(fileButton is not null && fileButton.Focusable, "File actions must be keyboard focusable");
                 activity.Hide();
+                controller.SaveLanguage("ko"); Check(store.Load().Language == "ko", "Language preference must persist");
+                foreach (var language in new[] { "ko", "en" })
+                {
+                    L.Language = language;
+                    var onboarding = new DashboardWindow(controller);
+                    onboarding.SettingsPage.Render(status with { Account = "Not connected" });
+                    Render(onboarding, Path.Combine(output, $"connection-{language}.png"));
+                    var guide = (System.Windows.Controls.Expander)onboarding.SettingsPage.FindName("ManualGuide");
+                    guide.IsExpanded = true; guide.BringIntoView(); onboarding.UpdateLayout();
+                    Render(onboarding, Path.Combine(output, $"token-guide-{language}.png"));
+                    Check(((System.Windows.Controls.PasswordBox)onboarding.SettingsPage.FindName("TokenBox")).Password.Length == 0, "Token input must start empty");
+                    var tokenBox = (System.Windows.Controls.PasswordBox)onboarding.SettingsPage.FindName("TokenBox");
+                    tokenBox.Password = "fixture-rejected-token";
+                    typeof(SettingsView).GetMethod("ManualConnect_Click", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .Invoke(onboarding.SettingsPage, [onboarding.SettingsPage, new RoutedEventArgs()]);
+                    var busyField = typeof(SettingsView).GetField("busy", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                    for (var wait = 0; wait < 100 && (bool)busyField.GetValue(onboarding.SettingsPage)!; wait++) await Task.Delay(20);
+                    Check(!(bool)busyField.GetValue(onboarding.SettingsPage)!, "Rejected token must stop validating");
+                    Check(tokenBox.Password == "fixture-rejected-token", "Failed validation must preserve input for retry");
+                    Check(!controller.Status.Account.StartsWith("Connected", StringComparison.Ordinal), "Rejected token must not connect");
+                    Check(!((TextBlock)onboarding.SettingsPage.FindName("FeedbackText")).Text.Contains("fixture rejection"), "Backend error must be localized");
+                    try { await controller.ConnectManualAsync("fixture-unverified-token"); throw new Exception("Unverified account accepted"); }
+                    catch (BackendException error) { Check(error.Code == "NOT_CONNECTED", "Ready but invalid profile must fail validation"); }
+                    Check(!controller.Status.Account.StartsWith("Connected", StringComparison.Ordinal), "Invalid profile must not connect");
+                    onboarding.Close();
+                }
+                L.Language = "ko";
                 var settingsDashboard = new DashboardWindow(controller);
                 var settings = settingsDashboard.SettingsPage; settings.Render(status);
                 typeof(ClientController).GetField("account",System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(controller,new AccountStatus { Ready=true,ExpiresAt="2027-09-29T12:00:00Z" });

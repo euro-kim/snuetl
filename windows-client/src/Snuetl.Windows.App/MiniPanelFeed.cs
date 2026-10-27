@@ -6,9 +6,9 @@ public sealed record MiniPanelItem(string Key, string Category, string Course, s
     string? Url, DateTimeOffset? When, string TimeLabel, bool Urgent = false)
 {
     public bool CanOpen => MiniPanelFeed.IsEtlUrl(Url);
-    public string CategoryLabel => Category switch { "announcements" => "공지사항", "deadlines" => "마감", "grades" => "성적 업데이트", "discussions" => "토론", _ => "강좌 업데이트" };
+    public string CategoryLabel => Category switch { "announcements" => L.T("공지사항"), "deadlines" => L.T("마감"), "grades" => L.T("성적 업데이트"), "discussions" => L.T("토론"), _ => L.T("강좌 업데이트") };
     public string Accent => Urgent ? "#B42335" : "#0F0F70";
-    public string LinkLabel => CanOpen ? "eTL에서 열기 ↗" : "eTL 링크 없음";
+    public string LinkLabel => CanOpen ? L.T("eTL에서 열기 ↗") : L.T("eTL 링크 없음");
 }
 
 public static class MiniPanelFeed
@@ -22,7 +22,7 @@ public static class MiniPanelFeed
     private static JsonElement[] Rows(AcademicSnapshot snapshot,string key) => snapshot.Datasets.GetValueOrDefault(key,[]);
     private static string Course(AcademicSnapshot snapshot,string id,string name = "") =>
         snapshot.Courses.FirstOrDefault(c => c.Id == id)?.Name is { Length: > 0 } found ? found
-        : name.Length > 0 ? name : id.Length > 0 ? $"강좌 {id}" : "SNU eTL";
+        : name.Length > 0 ? name : id.Length > 0 ? L.Pair($"강좌 {id}", $"Course {id}") : "SNU eTL";
     private static string? Url(AcademicSnapshot snapshot,JsonElement row,string type,string id)
     {
         var url = Value(row,"url");
@@ -44,9 +44,9 @@ public static class MiniPanelFeed
             var when = updated > posted ? updated : posted ?? updated;
             var title = Value(row,"title");
             return new MiniPanelItem($"announcement:{course}:{id}:{Value(row,"url")}","announcements",
-                Course(snapshot,course,Value(row,"course_name")),title.Length > 0 ? title : "공지사항",
+                Course(snapshot,course,Value(row,"course_name")),title.Length > 0 ? title : L.T("공지사항"),
                 Value(row,"summary"),Url(snapshot,row,"discussion_topics",id),when,
-                when is { } time ? $"{(updated > posted ? "수정" : "등록")} {time.LocalDateTime:MM-dd · HH:mm}" : "공지사항");
+                when is { } time ? $"{(updated > posted ? L.T("수정") : L.T("등록"))} {time.LocalDateTime:MM-dd · HH:mm}" : L.T("공지사항"));
         }).DistinctBy(item => item.Key).OrderByDescending(item => item.When).Take(100).ToArray();
     }
     private static string AssignmentKey(JsonElement row)
@@ -79,11 +79,11 @@ public static class MiniPanelFeed
             var course = Value(row,"course_id");
             var id = Value(row,"assignment_id");
             if (id.Length == 0) id = Value(row,"item_id");
-            var label = due < now ? "마감 지남" : due.LocalDateTime.Date == now.LocalDateTime.Date ? "오늘 마감" : "마감";
+            var label = due < now ? L.T("마감 지남") : due.LocalDateTime.Date == now.LocalDateTime.Date ? L.T("오늘 마감") : L.T("마감");
             var title = Value(row,"title");
             var route = Value(row,"type") switch { "" or "assignment" => "assignments", "quiz" => "quizzes", _ => "" };
             result.Add(new(key,"deadlines",Course(snapshot,course,Value(row,"course_name")),
-                title.Length > 0 ? title : "과제",missing ? "미제출" : "아직 제출하지 않음",
+                title.Length > 0 ? title : L.T("과제"),missing ? L.T("미제출") : L.T("아직 제출하지 않음"),
                 Url(snapshot,row,route,id),due,$"{label} {due.LocalDateTime:MM-dd · HH:mm}",due <= now.AddDays(1)));
         }
         return result.OrderBy(item => item.When).Take(100).ToArray();

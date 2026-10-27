@@ -5,6 +5,9 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../src/Snuetl.Windows.App/Assets/strings.json" LogicalName="Snuetl.Windows.Assets.strings.json" />
+    <Compile Include="../../src/Snuetl.Windows.App/L.cs" Link="L.cs" />
+    <Compile Include="../../src/Snuetl.Windows.App/BackendClient.cs" Link="BackendClient.cs" />
     <Compile Include="../../src/Snuetl.Windows.App/KoreanText.cs" Link="KoreanText.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
     <PackageReference Include="xunit" Version="2.9.3" />

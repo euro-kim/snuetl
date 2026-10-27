@@ -18,7 +18,7 @@ public sealed class ClientController : IAsyncDisposable
     public LoginProgress? AutomaticLoginProgress { get; private set; }
     public event EventHandler? LoginProgressChanged;
     private readonly SemaphoreSlim updateLock = new(1,1);
-    public string UpdateStatus { get; private set; } = "매주 새 버전 확인";
+    public string UpdateStatus { get; private set; } = L.T("매주 새 버전 확인");
     public bool IsRefreshing { get; private set; }
     private PeriodicTimer? refreshTimer;
     private int itemCount;
@@ -40,10 +40,11 @@ public sealed class ClientController : IAsyncDisposable
     {
         this.store = store;
         Settings = store.Load();
+        L.Language = Settings.Language;
         if (Settings.AvailableUpdate is { } cached && GitHubReleases.ParseVersion(cached.Version) <= GitHubReleases.ParseVersion(Branding.Version))
         { Settings = Settings with { AvailableUpdate = null }; store.Save(Settings); }
-        if (Settings.AvailableUpdate is { } update) UpdateStatus = $"버전 {update.Version} 업데이트 가능 · {update.Size / 1048576.0:F1} MB";
-        else if (Settings.LastUpdateCheck is { } checkedAt) UpdateStatus = $"매주 새 버전 확인 · 최근 확인 {checkedAt.LocalDateTime:yyyy-MM-dd HH:mm}";
+        if (Settings.AvailableUpdate is { } update) UpdateStatus = L.Pair($"버전 {update.Version} 업데이트 가능 · {update.Size / 1048576.0:F1} MB", $"Version {update.Version} available · {update.Size / 1048576.0:F1} MB");
+        else if (Settings.LastUpdateCheck is { } checkedAt) UpdateStatus = L.Pair($"매주 새 버전 확인 · 최근 확인 {checkedAt.LocalDateTime:yyyy-MM-dd HH:mm}", $"Weekly updates · Last checked {checkedAt.LocalDateTime:g}");
         Activity = new ActivityStore(store.DataDirectory);
         backend = new BackendClient(store.DataDirectory);
     }
@@ -120,7 +121,10 @@ public sealed class ClientController : IAsyncDisposable
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 { throw new IOException("Canvas token verification timed out. Check your connection and try again."); }
                 if (!account.Ready || account.Valid != true)
+                {
+                    account = new AccountStatus();
                     throw new BackendException("NOT_CONNECTED","Canvas access could not be verified. Try again or use a manual token.");
+                }
                 ct.ThrowIfCancellationRequested();
                 SetLoginProgress(new("Connected. Removing the temporary sign-in browser…"));
                 var removed = await SignInAddon.RemoveAfterLoginAsync(store.DataDirectory);
@@ -139,8 +143,8 @@ public sealed class ClientController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            error = exception.Message;
-            SetLoginProgress(new(exception.Message));
+            error = L.Error(exception);
+            SetLoginProgress(new(L.Error(exception)));
             throw;
         }
         finally { loginCancellation = null; LoginProgressChanged?.Invoke(this,EventArgs.Empty); Publish(); }
@@ -149,23 +153,32 @@ public sealed class ClientController : IAsyncDisposable
     public async Task ConnectManualAsync(string token)
     {
         error = null;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(90));
         Publish("Validating API token…");
         try
         {
             await backend.InvokeAsync<JsonElement>(
                 "auth.manual",
-                new { token, origin = "https://myetl.snu.ac.kr" });
-            account = await backend.InvokeAsync<AccountStatus>("auth.status", new { verify = true });
-            if (!account.Ready) throw new BackendException("NOT_CONNECTED", "Canvas access could not be verified. Check your API token.");
+                new { token, origin = "https://myetl.snu.ac.kr" }, timeout.Token);
+            var verified = await backend.InvokeAsync<AccountStatus>("auth.status", new { verify = true }, timeout.Token);
+            if (!verified.Ready || verified.Valid != true) throw new BackendException("NOT_CONNECTED", "Canvas access could not be verified. Check your API token.");
+            account = verified;
             await EnsureProviderAsync();
-            await RefreshAsync();
+            _ = RefreshAsync();
         }
         catch (Exception exception)
         {
-            error = exception.Message;
+            error = L.Error(exception);
             Publish("Token needs attention");
             throw;
         }
+    }
+
+    public void SaveLanguage(string language)
+    {
+        if (language is not ("system" or "ko" or "en")) return;
+        Settings = Settings with { Language = language }; store.Save(Settings);
     }
 
     public async Task DisconnectAsync()
@@ -179,7 +192,7 @@ public sealed class ClientController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            error = exception.Message;
+            error = L.Error(exception);
         }
         Publish("Disconnected");
     }
@@ -227,7 +240,7 @@ public sealed class ClientController : IAsyncDisposable
             {
                 account = account with { Ready = false };
             }
-            error = exception.Message;
+            error = L.Error(exception);
             if (lastLoggedError != error) Activity.Add("Sync failed — open settings for details");
             lastLoggedError = error;
             nextRefresh = DateTimeOffset.Now.AddMinutes(Settings.RefreshMinutes);
@@ -235,7 +248,7 @@ public sealed class ClientController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            error = exception.Message;
+            error = L.Error(exception);
             if (lastLoggedError != error) Activity.Add("Sync failed — open settings for details");
             lastLoggedError = error;
             nextRefresh = DateTimeOffset.Now.AddMinutes(Settings.RefreshMinutes);
@@ -309,15 +322,15 @@ public sealed class ClientController : IAsyncDisposable
             var now = DateTimeOffset.UtcNow;
             if (!force && !UpdateDue(Settings,now)) return;
             Settings = Settings with { LastUpdateAttempt = now }; store.Save(Settings);
-            UpdateStatus = "새 버전 확인 중…"; Publish();
+            UpdateStatus = L.T("새 버전 확인 중…"); Publish();
             using var github = new GitHubReleases(Settings.ReleaseRepository, token: GitHubCredential.Read());
             var asset = await github.FindAsync(false,lifetime.Token);
             var newer = asset is not null && GitHubReleases.ParseVersion(asset.Version) > GitHubReleases.ParseVersion(Branding.Version);
             Settings = Settings with { LastUpdateCheck = now, AvailableUpdate = newer ? asset : null }; store.Save(Settings);
-            UpdateStatus = asset is null ? "릴리스에서 Windows 설치 파일을 찾지 못했습니다." : newer ? $"버전 {asset!.Version} 업데이트 가능 · {asset.Size / 1048576.0:F1} MB" : $"최신 버전입니다 · 확인 {now.LocalDateTime:yyyy-MM-dd HH:mm}";
+            UpdateStatus = asset is null ? L.T("릴리스에서 Windows 설치 파일을 찾지 못했습니다.") : newer ? L.Pair($"버전 {asset!.Version} 업데이트 가능 · {asset.Size / 1048576.0:F1} MB", $"Version {asset!.Version} available · {asset.Size / 1048576.0:F1} MB") : L.Pair($"최신 버전입니다 · 확인 {now.LocalDateTime:yyyy-MM-dd HH:mm}", $"Up to date · Checked {now.LocalDateTime:g}");
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (Exception e) { UpdateStatus = "업데이트 확인 실패: " + e.Message; }
+        catch (Exception e) { UpdateStatus = L.T("업데이트 확인 실패: ") + L.Error(e); }
         finally { updateLock.Release(); Publish(); }
     }
     internal static bool UpdateDue(AppSettings settings, DateTimeOffset now) =>

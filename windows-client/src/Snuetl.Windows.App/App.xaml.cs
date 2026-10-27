@@ -52,7 +52,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception exception)
         {
-            System.Windows.MessageBox.Show(exception.Message, "SNUETL 오류", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(L.Error(exception), L.T("SNUETL 오류"), MessageBoxButton.OK, MessageBoxImage.Error);
             if (controller is not null) { try { await controller.DisposeAsync(); } catch { /* Preserve the startup error. */ } }
             Shutdown(1);
         }
@@ -97,13 +97,13 @@ public partial class App : System.Windows.Application
     {
         tray = new Forms.NotifyIcon { Text = "SNUETL", Icon = Branding.LoadIcon(), Visible = true, ContextMenuStrip = new Forms.ContextMenuStrip() };
         tray.MouseClick += (_, args) => { if (args.Button == Forms.MouseButtons.Left) Dispatcher.Invoke(ShowWindow); };
-        tray.ContextMenuStrip.Items.Add("학습 현황", null, (_, _) => Dispatcher.Invoke(() => ShowDashboard()));
-        tray.ContextMenuStrip.Items.Add("eTL 열기", null, (_, _) => ClientController.OpenEtl());
-        tray.ContextMenuStrip.Items.Add("최근 활동", null, (_, _) => Dispatcher.Invoke(ShowWindow));
-        tray.ContextMenuStrip.Items.Add("동기화 폴더 열기", null, (_, _) => controller?.OpenFolder());
-        tray.ContextMenuStrip.Items.Add("설정", null, (_, _) => Dispatcher.Invoke(ShowSettings));
+        tray.ContextMenuStrip.Items.Add(L.T("학습 현황"), null, (_, _) => Dispatcher.Invoke(() => ShowDashboard()));
+        tray.ContextMenuStrip.Items.Add(L.T("eTL 열기"), null, (_, _) => ClientController.OpenEtl());
+        tray.ContextMenuStrip.Items.Add(L.T("최근 활동"), null, (_, _) => Dispatcher.Invoke(ShowWindow));
+        tray.ContextMenuStrip.Items.Add(L.T("동기화 폴더 열기"), null, (_, _) => controller?.OpenFolder());
+        tray.ContextMenuStrip.Items.Add(L.T("설정"), null, (_, _) => Dispatcher.Invoke(ShowSettings));
         tray.ContextMenuStrip.Items.Add(new Forms.ToolStripSeparator());
-        tray.ContextMenuStrip.Items.Add("SNUETL 종료", null, async (_, _) => await QuitAsync());
+        tray.ContextMenuStrip.Items.Add(L.T("SNUETL 종료"), null, async (_, _) => await QuitAsync());
         UpdateIcon();
     }
     private void UpdateIcon()
@@ -144,7 +144,7 @@ public partial class App : System.Windows.Application
         window?.Render(status);
         if (tray is not null)
         {
-            var tooltip = status.Error is null ? $"SNUETL · {KoreanText.Status(status.State)}" : "SNUETL · 확인 필요";
+            var tooltip = status.Error is null ? $"SNUETL · {KoreanText.Status(status.State)}" : L.T("SNUETL · 확인 필요");
             tray.Text = tooltip[..Math.Min(63, tooltip.Length)];
         }
     }));

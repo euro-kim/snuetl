@@ -4,6 +4,7 @@ namespace Snuetl.Windows;
 
 public sealed record AppSettings
 {
+    public string Language { get; init; } = "system";
     public int SchemaVersion { get; init; } = 4;
     public string IconChoice { get; init; } = "SNU";
     public int IconStyleVersion { get; init; }
@@ -45,10 +46,10 @@ public sealed record AccountStatus
     [JsonPropertyName("manual")]
     public bool Manual { get; init; }
     public string ExpiryDescription => Manual
-        ? "API 키 만료일은 eTL 계정 설정에서 확인하세요. 직접 입력한 키의 만료일은 조회할 수 없습니다."
+        ? L.T("API 키 만료일은 eTL 계정 설정에서 확인하세요. 직접 입력한 키의 만료일은 조회할 수 없습니다.")
         : DateTimeOffset.TryParse(ExpiresAt, out var expiry)
-            ? $"API 키 만료: {expiry.LocalDateTime:yyyy-MM-dd HH:mm} · 만료 시 다시 로그인하세요. 폐기된 키는 더 일찍 작동을 멈출 수 있습니다."
-            : "계정 연결 후 API 키 만료일이 표시됩니다.";
+            ? L.Pair($"API 키 만료: {expiry.LocalDateTime:yyyy-MM-dd HH:mm} · 만료 시 다시 로그인하세요. 폐기된 키는 더 일찍 작동을 멈출 수 있습니다.", $"API key expires: {expiry.LocalDateTime:yyyy-MM-dd HH:mm}. Sign in again on expiry. Revoked keys may stop working earlier.")
+            : L.T("계정 연결 후 API 키 만료일이 표시됩니다.");
 }
 
 public sealed record Manifest

@@ -3,7 +3,7 @@ namespace Snuetl.Windows;
 // Translate presentation values without changing persisted event names or API keys.
 internal static class KoreanText
 {
-    internal static string Status(string value) => value switch
+    internal static string Status(string value) => L.T(value switch
     {
         "Up to date" => "동기화 완료",
         "Setup required" => "계정 연결 필요",
@@ -32,29 +32,29 @@ internal static class KoreanText
         "Removed from SNU eTL" => "eTL에서 삭제됨",
         "Local changes preserved" => "로컬 수정 내용 보존됨",
         "Renamed local file preserved" => "이름을 변경한 로컬 파일 보존됨",
-        _ when value.StartsWith("Connected:", StringComparison.Ordinal) => "연결됨" + value[9..],
-        _ => value
-    };
+        _ when value.StartsWith("Connected:", StringComparison.Ordinal) => L.Pair("연결됨", "Connected") + value[9..],
+        _ => L.Status(value)
+    });
 
-    internal static string Category(string value) => value.ToLowerInvariant() switch
+    internal static string Category(string value) => L.T(value.ToLowerInvariant() switch
     {
         "announcements" => "공지사항", "upcoming" => "예정된 과제", "missing" => "미제출",
         "submissions" => "제출 현황", "feedback" => "피드백", "grades" => "성적",
         "calendar" => "일정", "discussions" => "토론", "assignments" => "과제",
-        "reminders" => "마감 알림", "files" => "파일", "course" => "강좌", _ => value
-    };
+        "reminders" => "마감 알림", "files" => "파일", "course" => "강좌", _ => L.Status(value)
+    });
 
-    internal static string Field(string value) => value switch
+    internal static string Field(string value) => L.T(value switch
     {
         "due_at" => "마감", "start_at" => "시작", "workflow_state" => "상태",
         "grade" or "current_grade" => "성적", "current_score" => "점수",
         "submitted_at" => "제출", "graded_at" => "채점", "last_reply_at" => "최근 답글",
-        "missing" => "미제출", "late" => "지각 제출", "unread_count" => "읽지 않음", _ => value
-    };
+        "missing" => "미제출", "late" => "지각 제출", "unread_count" => "읽지 않음", _ => L.Status(value)
+    });
 
-    internal static string AcademicValue(string value) => value switch
+    internal static string AcademicValue(string value) => L.T(value switch
     {
         "submitted" => "제출 완료", "graded" => "채점 완료", "unsubmitted" => "미제출",
-        "pending_review" => "검토 중", "True" or "true" => "예", _ => value
-    };
+        "pending_review" => "검토 중", "True" or "true" => "예", _ => L.Status(value)
+    });
 }

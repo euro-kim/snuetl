@@ -128,10 +128,40 @@ def test_manual_token_header_is_normalized(monkeypatch, prefix):
     assert saved[0].value == value
 
 
-def test_manual_token_missing_prefix_is_not_guessed(monkeypatch):
-    monkeypatch.setattr(backend.httpx, "get", lambda *a, **k: pytest.fail("must validate before HTTP"))
-    with pytest.raises(backend.BackendError, match="complete Canvas token"):
-        backend.auth_manual("secret_example_token_123456789")
+@pytest.mark.parametrize("value", ["opaque_canvas_token_1234567890", "1~secret_example_token_123456789"])
+def test_manual_accepts_server_verified_token_formats(monkeypatch, value):
+    saved = []
+    def get(url, **kwargs):
+        assert kwargs["headers"]["Authorization"] == f"Bearer {value}"
+        assert kwargs["follow_redirects"] is False
+        return backend.httpx.Response(200, json={"id": 42})
+    monkeypatch.setattr(backend.httpx, "get", get)
+    monkeypatch.setattr(backend, "_prepare_desktop_helper", lambda: None)
+    monkeypatch.setattr(backend.codex_desktop, "_save_token", saved.append)
+    assert backend.auth_manual(value)["connected"]
+    assert saved[0].value == value
+
+
+@pytest.mark.parametrize("status,body", [(401, {}), (403, {}), (500, {}), (200, {"id": None}), (200, {"id": True}), (200, {}), (200, {"id": ""})])
+def test_manual_never_saves_rejected_or_invalid_profiles(monkeypatch, status, body):
+    monkeypatch.setattr(backend.httpx, "get", lambda *a, **k: backend.httpx.Response(status, json=body))
+    monkeypatch.setattr(backend.codex_desktop, "_save_token", lambda *a: pytest.fail("must not replace saved credential"))
+    with pytest.raises(backend.BackendError):
+        backend.auth_manual("opaque_canvas_token_1234567890")
+
+
+@pytest.mark.parametrize("value", ["", "short", "token with spaces 123456789012345", "x" * 513, "x"*25 + "\n" + "y"*25])
+def test_manual_invalid_clipboard_content_never_requests(monkeypatch, value):
+    monkeypatch.setattr(backend.httpx, "get", lambda *a, **k: pytest.fail("invalid input must not be sent"))
+    with pytest.raises(backend.BackendError): backend.auth_manual(value)
+
+
+def test_manual_network_failure_preserves_credentials(monkeypatch):
+    def get(*a, **k): raise backend.httpx.ConnectTimeout("offline")
+    monkeypatch.setattr(backend.httpx, "get", get)
+    monkeypatch.setattr(backend.codex_desktop, "_save_token", lambda *a: pytest.fail("must not save"))
+    with pytest.raises(backend.BackendError) as error: backend.auth_manual("opaque_canvas_token_1234567890")
+    assert error.value.code == "NETWORK"
 
 
 @pytest.mark.parametrize("status", [{"ready": False}, {"ready": True, "valid": False}, {"ready": True, "valid": True}])

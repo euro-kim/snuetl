@@ -45,14 +45,14 @@ public partial class MainWindow : Window
     public void Render(ClientStatus status)
     {
         SyncButton.IsEnabled = !controller.IsRefreshing;
-        SyncLabel.Text = controller.IsRefreshing ? "동기화 중…" : "지금 동기화";
+        SyncLabel.Text = controller.IsRefreshing ? L.T("동기화 중…") : L.T("지금 동기화");
         StateText.Text = KoreanText.Status(status.State);
-        AccountText.Text = $"수업 파일 {status.ItemCount}개 · {KoreanText.Status(status.Account)}";
-        RefreshText.Text = status.LastRefresh is null ? "첫 동기화 대기 중" : $"최근 확인 {status.LastRefresh.Value.LocalDateTime:yyyy-MM-dd HH:mm}";
+        AccountText.Text = L.Pair($"수업 파일 {status.ItemCount}개 · {KoreanText.Status(status.Account)}", $"{status.ItemCount} course files · {KoreanText.Status(status.Account)}");
+        RefreshText.Text = status.LastRefresh is null ? L.T("첫 동기화 대기 중") : L.Pair($"최근 확인 {status.LastRefresh.Value.LocalDateTime:yyyy-MM-dd HH:mm}", $"Last checked {status.LastRefresh.Value.LocalDateTime:g}");
         ErrorText.Text = status.Error ?? "";
         ErrorText.Visibility = status.Error is null ? Visibility.Collapsed : Visibility.Visible;
         UpdateBanner.Visibility = controller.Settings.AvailableUpdate is null ? Visibility.Collapsed : Visibility.Visible;
-        UpdateBannerText.Text = controller.Settings.AvailableUpdate is { } update ? $"SNUETL {update.Version} 업데이트 가능" : "";
+        UpdateBannerText.Text = controller.Settings.AvailableUpdate is { } update ? L.Pair($"SNUETL {update.Version} 업데이트 가능", $"SNUETL {update.Version} is available") : "";
     }
     private void Activity_MouseWheel(object sender, MouseWheelEventArgs e)
     {
@@ -78,7 +78,7 @@ public partial class MainWindow : Window
     {
         if (sender is not System.Windows.Controls.Button { Tag: ActivityEntry entry }) return;
         try { controller.OpenActivity(entry, directory); }
-        catch (Exception ex) { ErrorText.Text = ex.Message; ErrorText.Visibility = Visibility.Visible; }
+        catch (Exception ex) { ErrorText.Text = L.Error(ex); ErrorText.Visibility = Visibility.Visible; }
     }
     private void Dashboard_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowDashboard();
     private void FeedTab_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -87,7 +87,7 @@ public partial class MainWindow : Window
         var files = FeedTabs.SelectedIndex == 3;
         ActivityList.Visibility = files ? Visibility.Visible : Visibility.Collapsed;
         AcademicList.Visibility = files ? Visibility.Collapsed : Visibility.Visible;
-        if (files) { EmptyText.Text = "아직 파일 활동이 없습니다."; ReloadActivity(); }
+        if (files) { EmptyText.Text = L.T("아직 파일 활동이 없습니다."); ReloadActivity(); }
         else ReloadAcademic(resetScroll:true);
     }
     private void ReloadAcademic(bool resetScroll = false)
@@ -112,16 +112,16 @@ public partial class MainWindow : Window
         }
         EmptyText.Text = FeedTabs.SelectedIndex switch
         {
-            1 => "공지사항이 없습니다. 동기화하여 확인하세요.",
-            2 => "예정된 마감이 없습니다.",
-            _ => "최근 알림이 없습니다. 새 공지와 다가오는 마감이 여기에 표시됩니다."
+            1 => L.T("공지사항이 없습니다. 동기화하여 확인하세요."),
+            2 => L.T("예정된 마감이 없습니다."),
+            _ => L.T("최근 알림이 없습니다. 새 공지와 다가오는 마감이 여기에 표시됩니다.")
         };
         EmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
     private void AcademicItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button { Tag: MiniPanelItem item } || !item.CanOpen) return;
-        try { ClientController.OpenEtl(item.Url); } catch (Exception ex) { ErrorText.Text = ex.Message; ErrorText.Visibility = Visibility.Visible; }
+        try { ClientController.OpenEtl(item.Url); } catch (Exception ex) { ErrorText.Text = L.Error(ex); ErrorText.Visibility = Visibility.Visible; }
     }
     private void Settings_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowSettings();
     private void Update_Click(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).ShowUpdateSettings();
