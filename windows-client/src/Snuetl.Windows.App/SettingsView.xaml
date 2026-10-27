@@ -65,9 +65,9 @@
                             </StackPanel></Border>
                             <Border x:Name="ManualCard" Style="{StaticResource Card}"><StackPanel>
                                 <TextBlock Text="{local:Translate 'API 키로 직접 연결'}" FontWeight="SemiBold" FontSize="16"/>
-                                <TextBlock Text="{local:Translate '추가 다운로드가 없습니다. 그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+                                <TextBlock Text="{local:Translate '그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
 
-                                <Expander Header="{local:Translate 'API 키 발급 안내'}" x:Name="ManualGuide">
+                                <Expander Header="{local:Translate 'API 키 발급 안내'}" x:Name="ManualGuide" IsExpanded="True" Margin="0,4,0,0">
                                     <StackPanel Margin="0,12,0,0">
                                         <Button Content="{local:Translate 'API 키 발급 페이지'}" Click="TokenSettings_Click" HorizontalAlignment="Left"/>
                                         <TextBlock Text="{local:Translate '1. eTL에서 Account(계정) → Settings(설정)를 엽니다.'}" TextWrapping="Wrap" Margin="0,12,0,8"/>
@@ -80,13 +80,20 @@
                                         <Image x:Name="TokenCopyImage" Source="Assets/token-step-4.png" MaxWidth="640" Stretch="Uniform"/>
                                     </StackPanel>
                                 </Expander>
-                                <TextBlock Text="{local:Translate 'API 키 붙여 넣기'}" Margin="0,16,0,8"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
+                                    <TextBlock Text="{local:Translate 'API 키 붙여 넣기'}" VerticalAlignment="Center"/>
+                                    <Border x:Name="TokenHelp" Width="18" Height="18" CornerRadius="9" BorderThickness="1" BorderBrush="{StaticResource MutedBrush}" Background="Transparent" Margin="8,0,0,0" Cursor="Help" ToolTipService.InitialShowDelay="150" AutomationProperties.Name="{local:Translate 'API 키 저장 안내'}">
+                                        <Border.ToolTip>
+                                            <ToolTip><TextBlock Text="{local:Translate 'eTL에서 유효한 키로 확인된 후에만 안전하게 저장합니다.'}" TextWrapping="Wrap" MaxWidth="320"/></ToolTip>
+                                        </Border.ToolTip>
+                                        <TextBlock Text="?" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </StackPanel>
                                 <DockPanel>
                                     <Button DockPanel.Dock="Right" Content="{local:Translate '붙여 넣기'}" Click="PasteToken_Click" Margin="8,0,0,0"/>
                                     <PasswordBox x:Name="TokenBox" Padding="10" AutomationProperties.Name="{local:Translate 'eTL API 키'}"/>
                                 </DockPanel>
-                                <TextBlock Text="{local:Translate 'eTL에서 유효한 키로 확인된 후에만 안전하게 저장합니다.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
-                                <Button Content="{local:Translate '연결 확인 후 저장'}" Click="ManualConnect_Click" HorizontalAlignment="Left"/>
+                                <Button Content="{local:Translate '연결 확인 후 저장'}" Click="ManualConnect_Click" HorizontalAlignment="Right" Margin="0,12,0,0"/>
 
                             </StackPanel></Border>
                         </StackPanel>

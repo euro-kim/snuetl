@@ -14,7 +14,7 @@
             </StackPanel></Border>
             <Border Style="{StaticResource Card}"><StackPanel>
                 <TextBlock Text="{local:Translate 'API 키로 직접 연결'}" FontSize="20" FontWeight="SemiBold"/>
-                <TextBlock Text="{local:Translate '추가 다운로드가 없습니다. 그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Margin="0,12,0,18"/>
+                <TextBlock Text="{local:Translate '그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Margin="0,12,0,18"/>
                 <Button x:Name="ManualChoice" Content="{local:Translate 'API 키 직접 입력 선택'}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Manual_Click"/>
             </StackPanel></Border>
             <TextBlock x:Name="ReadyText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,0"/>

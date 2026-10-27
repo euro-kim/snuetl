@@ -211,7 +211,6 @@
   "자동으로 연결": "Automatic connection",
   "임시 브라우저를 추가로 다운로드합니다. 서울대학교 계정으로 로그인하면 연결을 확인합니다.": "Downloads a temporary browser. Sign in with your SNU account, then SNUETL verifies the connection.",
   "API 키로 직접 연결": "Connect with an API key",
-  "추가 다운로드가 없습니다. 그림 안내에 따라 API 키를 발급하고 복사하세요.": "No additional download. Follow the illustrated guide to create and copy your key.",
   "API 키 발급 안내": "API key setup guide",
   "1. eTL에서 Account(계정) → Settings(설정)를 엽니다.": "1. Open Account → Settings in eTL.",
   "2. Approved Integrations에서 New Access Token을 선택합니다.": "2. Under Approved Integrations, choose New Access Token.",
@@ -275,5 +274,7 @@
   "앱을 준비하는 중입니다…": "Preparing the app…",
   "연결되었습니다.": "Connected.",
   "로그인 브라우저를 제거하지 못했습니다. 설정 → 구성 요소에서 제거할 수 있습니다.": "Sign-in browser could not be removed. You can remove it in Settings → Components.",
-  "← 뒤로": "← Back"
+  "← 뒤로": "← Back",
+  "그림 안내에 따라 API 키를 발급하고 복사하세요.": "Follow the illustrated guide to create and copy your API key.",
+  "API 키 저장 안내": "About saving your API key"
 }
