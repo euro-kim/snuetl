@@ -12,6 +12,8 @@ public partial class App : System.Windows.Application
     private ClientController? controller;
     private MainWindow? window;
     private DashboardWindow? dashboard;
+    private OnboardingWindow? onboarding;
+    private bool startupReady;
     private Forms.NotifyIcon? tray;
     private readonly CancellationTokenSource lifetime = new();
     private bool quitting;
@@ -38,16 +40,20 @@ public partial class App : System.Windows.Application
             // Build windows only on request; quiet startup needs only the tray icon.
             _ = InstanceChannel.ServeAsync(command => Dispatcher.BeginInvoke(new Action(async () =>
             {
-                if (command == "shutdown") await QuitAsync(); else if (command is "dashboard" or "notifications" or "files") ShowDashboard(command == "notifications", command == "files"); else ShowWindow();
+                if (command == "shutdown") await QuitAsync();
+                else if (!controller.Status.Account.StartsWith("Connected", StringComparison.Ordinal)) ShowOnboarding();
+                else if (command is "dashboard" or "notifications" or "files") ShowDashboard(command == "notifications", command == "files"); else ShowWindow();
             })), lifetime.Token);
             controller.StatusChanged += OnStatusChanged;
             controller.AppearanceChanged += (_, _) => UpdateIcon();
+            if (e.Args.Contains("--onboarding") && !controller.Settings.SetupCompleted) ShowOnboarding();
             await controller.StartAsync();
+            startupReady = true; onboarding?.SetReady(true);
             ConfigureTray();
             if (!e.Args.Contains("--background"))
             {
-                if (!controller.Settings.SetupCompleted || !controller.Status.Account.StartsWith("Connected", StringComparison.Ordinal)) ShowSettings();
-                else ShowDashboard(ActivationRoute(e.Args) == "notifications", ActivationRoute(e.Args) == "files");
+                if (!controller.Status.Account.StartsWith("Connected", StringComparison.Ordinal)) ShowOnboarding();
+                else { onboarding?.Close(); ShowDashboard(ActivationRoute(e.Args) == "notifications", ActivationRoute(e.Args) == "files"); }
             }
         }
         catch (Exception exception)
@@ -121,7 +127,19 @@ public partial class App : System.Windows.Application
         window.Top = Math.Max(area.Top, area.Bottom - window.ActualHeight - 16);
         window.Activate();
     }
-    private static string ActivationRoute(IEnumerable<string> args) => args.Any(a => a.TrimEnd('/').Equals("snuetl://files", StringComparison.OrdinalIgnoreCase)) ? "files" : args.Any(a => a.TrimEnd('/').Equals("snuetl://notifications", StringComparison.OrdinalIgnoreCase)) ? "notifications" : "dashboard";
+    private static string ActivationRoute(IEnumerable<string> args) => args.Contains("--onboarding") ? "onboarding" : args.Any(a => a.TrimEnd('/').Equals("snuetl://files", StringComparison.OrdinalIgnoreCase)) ? "files" : args.Any(a => a.TrimEnd('/').Equals("snuetl://notifications", StringComparison.OrdinalIgnoreCase)) ? "notifications" : "dashboard";
+    private void ShowOnboarding()
+    {
+        if (controller is null) return;
+        if (onboarding is null)
+        {
+            onboarding = new OnboardingWindow(controller, () => ShowDashboard());
+            onboarding.Closed += (_, _) => onboarding = null;
+        }
+        onboarding.SetReady(startupReady);
+        window?.Hide(); dashboard?.Hide();
+        onboarding.Show(); onboarding.WindowState = WindowState.Normal; onboarding.Activate();
+    }
     internal void ShowDashboard(bool notifications = false, bool files = false)
     {
         if (controller is null) return;

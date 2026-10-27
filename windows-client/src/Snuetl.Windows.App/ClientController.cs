@@ -175,6 +175,12 @@ public sealed class ClientController : IAsyncDisposable
         }
     }
 
+    internal bool CompleteOnboarding()
+    {
+        if (!account.Ready || account.Valid != true) return false;
+        Settings = Settings with { SetupCompleted = true }; store.Save(Settings);
+        return true;
+    }
     public void SaveLanguage(string language)
     {
         if (language is not ("system" or "ko" or "en")) return;

@@ -43,7 +43,7 @@
 
     <CustomAction Id="UnregisterSyncRoot" FileRef="SNUETLEXE" ExeCommand="--uninstall"
                   Execute="deferred" Impersonate="yes" Return="check" />
-    <CustomAction Id="LaunchSNUETL" FileRef="SNUETLEXE" ExeCommand=""
+    <CustomAction Id="LaunchSNUETL" FileRef="SNUETLEXE" ExeCommand="--onboarding"
                   Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
       <Custom Action="StopSNUETL" Before="InstallValidate" Condition="NOT UPGRADINGPRODUCTCODE" />

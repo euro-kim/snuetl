@@ -196,6 +196,27 @@ internal static class Program
                 foreach (var language in new[] { "ko", "en" })
                 {
                     L.Language = language;
+                    var completed = false;
+                    var chooser = new OnboardingWindow(controller, () => completed = true);
+                    Check(!((System.Windows.Controls.Button)chooser.FindName("AutomaticChoice")).IsEnabled, "Choice must wait for initialization");
+                    chooser.SetReady(true);
+                    Check(((System.Windows.Controls.Button)chooser.FindName("ManualChoice")).IsEnabled, "Manual choice must be available after initialization");
+                    Render(chooser, Path.Combine(output, $"onboarding-choice-{language}.png"));
+                    Check(!controller.IsSigningIn, "Showing chooser must not start automatic login");
+                    chooser.SelectMethod(false);
+                    var chosenPage = (SettingsView)((System.Windows.Controls.ContentControl)chooser.FindName("ConnectionHost")).Content;
+                    Check(((Border)chosenPage.FindName("AutomaticCard")).Visibility == Visibility.Collapsed, "Manual flow must hide automatic login");
+                    Check(((Border)chosenPage.FindName("ManualCard")).Visibility == Visibility.Visible, "Manual flow must show key input");
+                    Render(chooser, Path.Combine(output, $"onboarding-manual-{language}.png"));
+                    chooser.SelectMethod(true);
+                    chosenPage = (SettingsView)((System.Windows.Controls.ContentControl)chooser.FindName("ConnectionHost")).Content;
+                    Check(((Border)chosenPage.FindName("ManualCard")).Visibility == Visibility.Collapsed, "Automatic flow must hide key input");
+                    Check(!controller.IsSigningIn && !completed, "Method selection alone must not download, sign in, or finish setup");
+                    Render(chooser, Path.Combine(output, $"onboarding-automatic-{language}.png"));
+                    ((System.Windows.Controls.Button)chooser.FindName("BackButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                    Check(((StackPanel)chooser.FindName("ChoicePanel")).Visibility == Visibility.Visible, "User must be able to change methods");
+                    chooser.Close();
+                    Check(!controller.CompleteOnboarding(), "Unverified onboarding must not complete");
                     var onboarding = new DashboardWindow(controller);
                     onboarding.SettingsPage.Render(status with { Account = "Not connected" });
                     Render(onboarding, Path.Combine(output, $"connection-{language}.png"));

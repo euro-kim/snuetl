@@ -48,19 +48,19 @@
             </TabControl.Resources>
             <TabItem Header="{local:Translate '일반'}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="0,18,0,0">
-                        <Border Style="{StaticResource Card}">
+                    <StackPanel x:Name="GeneralStack" Margin="0,18,0,0">
+                        <Border x:Name="AccountCard" Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{local:Translate 'eTL 계정'}" Style="{StaticResource SectionTitle}"/>
                                 <TextBlock x:Name="AccountText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <TextBlock x:Name="AccountExpiryText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                                 <StackPanel x:Name="SignInPanel">
-                                    <Border BorderBrush="#DADAE8" BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,0,12"><StackPanel>
+                                    <Border x:Name="AutomaticCard" BorderBrush="#DADAE8" BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,0,12"><StackPanel>
                                         <TextBlock Text="{local:Translate '자동으로 연결'}" FontWeight="SemiBold" FontSize="16"/>
                                         <TextBlock Text="{local:Translate '임시 브라우저를 추가로 다운로드합니다. 서울대학교 계정으로 로그인하면 연결을 확인합니다.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
                                         <Button Content="{local:Translate '자동으로 연결'}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="Connect_Click"/>
                                     </StackPanel></Border>
-                                    <Border BorderBrush="#DADAE8" BorderThickness="1" CornerRadius="10" Padding="16"><StackPanel>
+                                    <Border x:Name="ManualCard" BorderBrush="#DADAE8" BorderThickness="1" CornerRadius="10" Padding="16"><StackPanel>
                                         <TextBlock Text="{local:Translate 'API 키로 직접 연결'}" FontWeight="SemiBold" FontSize="16"/>
                                         <TextBlock Text="{local:Translate '추가 다운로드가 없습니다. 그림 안내에 따라 API 키를 발급하고 복사하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
 
@@ -230,7 +230,7 @@
         </Border>
         <Border Grid.Row="3" Background="White" BorderBrush="#E1E1EC" BorderThickness="0,1,0,0" Padding="24,16">
             <DockPanel>
-                <Button DockPanel.Dock="Right" Content="{local:Translate '설정 저장'}" Style="{StaticResource PrimaryButton}" Margin="16,0,0,0" Click="Done_Click"/>
+                <Button x:Name="SaveSettingsButton" DockPanel.Dock="Right" Content="{local:Translate '설정 저장'}" Style="{StaticResource PrimaryButton}" Margin="16,0,0,0" Click="Done_Click"/>
                 <TextBlock x:Name="FeedbackText" Text="{local:Translate '변경한 설정은 저장 버튼을 눌러 적용하세요.'}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>

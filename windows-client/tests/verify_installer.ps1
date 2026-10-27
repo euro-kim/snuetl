@@ -31,6 +31,10 @@ try {
   if (-not ($shortcutProperties | Where-Object Key -EQ 'System.AppUserModel.ToastActivatorCLSID')) { throw 'Notification activation identity is missing' }
   if ($properties | Where-Object Name -EQ 'INSTALLSIGNIN') { throw 'Browser installation must be chosen inside the app, not the installer' }
   $customActions = @(Read-Table 'SELECT `Action`,`Target` FROM `CustomAction`' @('Action','Target'))
+  if (($customActions | Where-Object Action -EQ 'LaunchSNUETL').Target -ne '--onboarding') { throw 'Installer must launch the connection chooser' }
+  $launch = $actions | Where-Object Action -EQ 'LaunchSNUETL'
+  $finalize = $actions | Where-Object Action -EQ 'InstallFinalize'
+  if ([int]$launch.Sequence -le [int]$finalize.Sequence) { throw 'Connection chooser must launch after installation finishes' }
   if (($customActions | Where-Object Action -EQ 'LaunchSNUETL').Target -like '*install-signin*') { throw 'Installer must not download the browser automatically' }
   Write-Host 'Installer checks passed: version, upgrade isolation, shutdown sequence and runtime-folder cleanup.'
 } finally {

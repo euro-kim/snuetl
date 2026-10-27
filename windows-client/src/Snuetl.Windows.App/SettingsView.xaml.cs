@@ -10,6 +10,20 @@ public partial class SettingsView : System.Windows.Controls.UserControl
 {
     private readonly ClientController controller;
     private bool busy;
+    internal bool IsBusy => busy;
+    internal event EventHandler? ConnectionVerified;
+    internal void ConfigureOnboarding(bool automatic)
+    {
+        foreach (System.Windows.Controls.TabItem tab in SettingsTabs.Items)
+            if (tab != SettingsTabs.Items[0]) tab.Visibility = Visibility.Collapsed;
+        foreach (UIElement child in GeneralStack.Children)
+            if (child != AccountCard) child.Visibility = Visibility.Collapsed;
+        AutomaticCard.Visibility = automatic ? Visibility.Visible : Visibility.Collapsed;
+        ManualCard.Visibility = automatic ? Visibility.Collapsed : Visibility.Visible;
+        SaveSettingsButton.Visibility = Visibility.Collapsed;
+        WelcomeText.Text = L.T("SNUETL 시작하기");
+        FeedbackText.Text = "";
+    }
     private string notificationCourse = "*";
     private readonly Dictionary<string,string[]> selections = [];
     private static readonly (string Key,string Label)[] Categories = [("announcements",L.T("공지사항")),("assignments",L.T("과제 및 마감 변경")),("reminders",L.T("마감 사전 알림")),("grades",L.T("성적 및 피드백")),("discussions",L.T("토론 활동")),("files",L.T("파일 업데이트"))];
@@ -96,8 +110,10 @@ public partial class SettingsView : System.Windows.Controls.UserControl
     }
     private async void Connect_Click(object sender, RoutedEventArgs e)
     {
-        await RunAsync(controller.ConnectAutomaticallyAsync, L.T("자동 로그인 준비 중…"), L.T("연결했습니다. 수업 자료를 동기화합니다."));
+        var connected = false;
+        await RunAsync(async () => { await controller.ConnectAutomaticallyAsync(); connected = true; }, L.T("자동 로그인 준비 중…"), L.T("연결했습니다. 수업 자료를 동기화합니다."));
         Render(controller.Status);
+        if (connected) ConnectionVerified?.Invoke(this, EventArgs.Empty);
     }
     private void Language_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
@@ -117,7 +133,7 @@ public partial class SettingsView : System.Windows.Controls.UserControl
         var connected = false;
         await RunAsync(async () => { await controller.ConnectManualAsync(token); connected = true; },
             L.T("API 키 확인 중…"), L.T("연결 확인 완료. 계정이 연결되었습니다."));
-        if (connected) TokenBox.Clear();
+        if (connected) { TokenBox.Clear(); ConnectionVerified?.Invoke(this, EventArgs.Empty); }
     }
     private async void SignOut_Click(object sender, RoutedEventArgs e) => await RunAsync(controller.DisconnectAsync, L.T("로그아웃 중…"), L.T("로그아웃했습니다."));
     private void Open_Click(object sender, RoutedEventArgs e) => controller.OpenFolder();
